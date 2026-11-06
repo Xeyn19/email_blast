@@ -1,18 +1,58 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
+  const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+
+  async function handleLogin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setMessage("");
+    setIsLoading(true);
+
+    const form = e.currentTarget;
+    const data = new FormData(form);
+
+    const email = String(data.get("email") || "").trim();
+    const password = String(data.get("password") || "");
+
+    try {
+      const supabase = createClient();
+
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch {
+      setMessage("Something went wrong. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   return (
     <main className="login-page">
       <section className="login-card">
         <div className="brand">
           <div className="brand-icon">E</div>
-          <span>Email<span className="brand-highlight">Blast</span></span>
+          <span>
+            Email<span className="brand-highlight">Blast</span>
+          </span>
         </div>
 
         <div className="login-heading">
@@ -23,13 +63,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <form
-          className="login-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            alert("Login UI only. Authentication is not connected yet.");
-          }}
-        >
+        <form className="login-form" onSubmit={handleLogin}>
           <div className="form-group">
             <label htmlFor="email">Email address</label>
             <input
@@ -45,15 +79,9 @@ export default function LoginPage() {
           <div className="form-group">
             <div className="password-label">
               <label htmlFor="password">Password</label>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() =>
-                  alert("Password recovery will be added later.")
-                }
-              >
+              <span className="text-button">
                 Forgot password?
-              </button>
+              </span>
             </div>
 
             <div className="password-wrap">
@@ -81,8 +109,22 @@ export default function LoginPage() {
             <span>Remember me</span>
           </label>
 
-          <button type="submit" className="submit-button">
-            Sign in <span>→</span>
+          {message && (
+            <p
+              role="alert"
+              style={{ fontSize: 13, color: "#dc2626" }}
+            >
+              {message}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="submit-button"
+            disabled={isLoading}
+          >
+            {isLoading ? "Signing in..." : "Sign in"}
+            {!isLoading && <span>→</span>}
           </button>
         </form>
 

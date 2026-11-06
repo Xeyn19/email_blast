@@ -1162,3 +1162,87 @@ a {
     flex-wrap: wrap;
   }
 }
+
+
+/* =========================================
+   EMAILBLAST - FULL WIDTH AUTHENTICATION
+   Remove right promotional panel
+========================================= */
+
+/* Use the entire screen */
+.login-page {
+  grid-template-columns: 1fr;
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Hide promotional section on both pages */
+.login-aside {
+  display: none !important;
+}
+
+/* Center authentication content */
+.login-card {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 50px 24px;
+}
+
+/* Keep content at a consistent width */
+.login-card > .brand,
+.login-heading,
+.login-form,
+.register-text,
+.login-footer {
+  width: 100%;
+  max-width: 460px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Preserve brand spacing */
+.login-card > .brand {
+  margin-bottom: 55px;
+}
+
+/* Preserve heading spacing */
+.login-heading {
+  margin-bottom: 30px;
+}
+
+/* Form layout */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Keep labels left-aligned */
+.login-form label {
+  text-align: left;
+}
+
+/* Center registration text */
+.register-text {
+  text-align: center;
+}
+
+/* Center footer */
+.login-footer {
+  text-align: center;
+}
+
+/* Mobile adjustments */
+@media (max-width: 760px) {
+  .login-card {
+    padding: 35px 24px;
+  }
+
+  .login-card > .brand {
+    margin-bottom: 40px;
+  }
+}

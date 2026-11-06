@@ -1,28 +1,85 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 export default function RegisterPage() {
+  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  function handleRegister(e: React.FormEvent<HTMLFormElement>) {
+  async function handleRegister(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setMessage("");
 
     const form = e.currentTarget;
     const data = new FormData(form);
 
-    const password = data.get("password");
-    const confirmPassword = data.get("confirmPassword");
+    const name = String(data.get("name") || "").trim();
+    const email = String(data.get("email") || "").trim();
+    const password = String(data.get("password") || "");
+    const confirmPassword = String(data.get("confirmPassword") || "");
 
     if (password !== confirmPassword) {
       setMessage("Passwords do not match.");
       return;
     }
 
-    setMessage("Demo only! Registration is not connected yet.");
+    if (password.length < 8) {
+      setMessage("Your password must be at least 8 characters.");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const supabase = createClient();
+
+      const { data: result, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+          },
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+
+if (error) {
+  console.error("Supabase registration error:", error);
+
+  console.error("Error details:", {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    status: error.status,
+  });
+
+  setMessage(
+    error.message || "Registration failed. Please try again."
+  );
+
+  return;
+}
+
+      if (result.session) {
+        router.push("/dashboard");
+        router.refresh();
+      } else {
+        setMessage(
+          "Your account was created! Please check your email and click the confirmation link before signing in."
+        );
+      }
+    } catch {
+      setMessage("Something went wrong. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -105,23 +162,31 @@ export default function RegisterPage() {
 
           <label className="remember-row">
             <input type="checkbox" required />
-            <span>I agree to the Terms and Privacy Policy (demo)</span>
+            <span>I agree to the Terms and Privacy Policy</span>
           </label>
 
           {message && (
-            <p role="status" style={{ fontSize: 13, color: "#635bdb" }}>
+            <p
+              role="status"
+              style={{ fontSize: 13, color: "#635bdb" }}
+            >
               {message}
             </p>
           )}
 
-          <button type="submit" className="submit-button">
-            Create account <span>→</span>
+          <button
+            type="submit"
+            className="submit-button"
+            disabled={isLoading}
+          >
+            {isLoading ? "Creating account..." : "Create account"}
+            {!isLoading && <span>→</span>}
           </button>
         </form>
 
         <p className="register-text">
           Already have an account?{" "}
-          <Link href="/login">Sign in</Link>
+          <Link href="/">Sign in</Link>
         </p>
 
         <div className="login-footer">
