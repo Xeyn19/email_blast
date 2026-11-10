@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getDeliverabilityError } from "@/lib/campaigns/deliverability";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   mapBrevoStatus,
@@ -264,6 +265,50 @@ async function synchronizeRecipients(
         campaign.id
       );
     }
+  }
+
+  const listResponse = await fetch(
+    `https://api.brevo.com/v3/contacts/lists/${Number(listId)}`,
+    {
+      method: "GET",
+      headers: brevoHeaders(configuration.apiKey),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
+  const listResult = await readJsonSafely(listResponse);
+
+  if (!listResponse.ok || typeof listResult?.totalSubscribers !== "number") {
+    throw new CampaignServiceError(
+      "Brevo could not verify the campaign recipients. Try again.",
+      502,
+      "brevo_recipient_verification_failed",
+      campaign.id
+    );
+  }
+
+  const expectedRecipientCount = new Set(
+    contacts.map((contact) => contact.email.trim().toLowerCase())
+  ).size;
+  const deliverableRecipientCount = listResult.totalSubscribers;
+  const deliverabilityError = getDeliverabilityError(
+    expectedRecipientCount,
+    deliverableRecipientCount
+  );
+
+  if (deliverabilityError) {
+    await supabase
+      .from("campaigns")
+      .update({ brevo_synced_at: null, last_error: deliverabilityError })
+      .eq("id", campaign.id)
+      .eq("user_id", campaign.user_id);
+
+    throw new CampaignServiceError(
+      deliverabilityError,
+      400,
+      "no_deliverable_recipients",
+      campaign.id
+    );
   }
 
   const syncedAt = new Date().toISOString();
