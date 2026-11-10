@@ -35,6 +35,12 @@ type BrevoConfiguration = {
   senderName: string;
 };
 
+type BrevoSender = {
+  id: number;
+  active: boolean;
+  email: string;
+};
+
 export class CampaignServiceError extends Error {
   constructor(
     message: string,
@@ -79,6 +85,44 @@ async function readJsonSafely(response: Response) {
   } catch {
     return null;
   }
+}
+
+function getBrevoErrorMessage(
+  result: Record<string, unknown> | null,
+  fallback: string
+) {
+  const code = typeof result?.code === "string" ? result.code : "";
+  const message = typeof result?.message === "string" ? result.message : "";
+  const detail = [code, message].filter(Boolean).join(": ").slice(0, 300);
+  return detail ? `${fallback} Brevo: ${detail}` : fallback;
+}
+
+async function getActiveBrevoSender(configuration: BrevoConfiguration) {
+  const response = await fetch("https://api.brevo.com/v3/senders", {
+    method: "GET",
+    headers: brevoHeaders(configuration.apiKey),
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
+  const result = await readJsonSafely(response);
+  const senders = Array.isArray(result?.senders)
+    ? (result.senders as BrevoSender[])
+    : [];
+  const sender = senders.find(
+    (candidate) =>
+      candidate.active &&
+      candidate.email.toLowerCase() === configuration.senderEmail.toLowerCase()
+  );
+
+  if (!response.ok || !sender) {
+    throw new CampaignServiceError(
+      "The configured Brevo sender is not active in this Brevo account.",
+      502,
+      "brevo_sender_unavailable"
+    );
+  }
+
+  return sender;
 }
 
 async function getOwnedCampaign(
@@ -252,28 +296,40 @@ async function createBrevoDraft(
     return Number(campaign.brevo_campaign_id);
   }
 
+  const sender = await getActiveBrevoSender(configuration);
+  const requestBody = {
+    name: campaign.name,
+    sender: { id: sender.id },
+    subject: campaign.subject,
+    htmlContent: campaign.html_content,
+    recipients: { listIds: [listId] },
+    ...(campaign.preview_text?.trim()
+      ? { previewText: campaign.preview_text.trim() }
+      : {}),
+  };
+
   const response = await fetch("https://api.brevo.com/v3/emailCampaigns", {
     method: "POST",
     headers: brevoHeaders(configuration.apiKey, true),
-    body: JSON.stringify({
-      name: campaign.name,
-      sender: {
-        name: configuration.senderName,
-        email: configuration.senderEmail,
-      },
-      subject: campaign.subject,
-      previewText: campaign.preview_text || "",
-      htmlContent: campaign.html_content,
-      recipients: { listIds: [listId] },
-    }),
+    body: JSON.stringify(requestBody),
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
   });
   const result = await readJsonSafely(response);
 
   if (!response.ok || typeof result?.id !== "number") {
+    const errorMessage = getBrevoErrorMessage(
+      result,
+      "Brevo could not prepare the email draft."
+    );
+    await supabase
+      .from("campaigns")
+      .update({ last_error: errorMessage })
+      .eq("id", campaign.id)
+      .eq("user_id", campaign.user_id);
+
     throw new CampaignServiceError(
-      "Brevo could not prepare the email draft. Try again.",
+      errorMessage,
       502,
       "brevo_campaign_failed",
       campaign.id
