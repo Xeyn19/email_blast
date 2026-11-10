@@ -52,7 +52,7 @@ async function NewCampaignContent() {
           </p>
         </div>
 
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-6 md:p-8">
+<div className="rounded-xl border border-white/10 bg-[#171717] p-6 md:p-8">
           <CampaignForm />
         </div>
       </div>

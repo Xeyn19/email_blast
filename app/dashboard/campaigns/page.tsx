@@ -82,6 +82,7 @@ async function CampaignsContent() {
                   <th className="p-4">Subject</th>
                   <th className="p-4">Status</th>
                   <th className="p-4">Created</th>
+                  <th className="p-4">Action</th>
                 </tr>
               </thead>
 
@@ -89,19 +90,33 @@ async function CampaignsContent() {
                 {campaigns.map((campaign) => (
                   <tr
                     key={campaign.id}
-                    className="border-t border-white/10"
+                    className="border-t border-white/10 transition hover:bg-white/[0.03]"
                   >
                     <td className="p-4 font-medium">
                       {campaign.name}
                     </td>
+
                     <td className="p-4 text-gray-400">
                       {campaign.subject || "No subject"}
                     </td>
+
                     <td className="p-4 capitalize">
                       {campaign.status}
                     </td>
+
                     <td className="p-4 text-gray-400">
-                      {new Date(campaign.created_at).toLocaleDateString()}
+                      {new Date(
+                        campaign.created_at
+                      ).toLocaleDateString()}
+                    </td>
+
+                    <td className="p-4">
+                      <Link
+                        href={`/dashboard/campaigns/${campaign.id}`}
+                        className="inline-block whitespace-nowrap rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
+                      >
+                        Open Campaign
+                      </Link>
                     </td>
                   </tr>
                 ))}

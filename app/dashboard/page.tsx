@@ -1,8 +1,31 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
+import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import DashboardClient from "./dashboard-client";
 
-export default async function DashboardPage() {
+export default function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
+  return (
+    <Suspense fallback={<div className="p-8">Loading dashboard...</div>}>
+      <DashboardContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function DashboardContent({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
+  await connection();
+
+  const params = await searchParams;
+  const initialView = params.view === "contacts" ? "Contacts" : "Overview";
+
   const supabase = await createClient();
 
   const {
@@ -10,12 +33,10 @@ export default async function DashboardPage() {
     error,
   } = await supabase.auth.getUser();
 
-  // Redirect users who are not logged in.
   if (error || !user) {
     redirect("/");
   }
 
-  // Get the user's registered name.
   const fullName =
     typeof user.user_metadata?.full_name === "string"
       ? user.user_metadata.full_name
@@ -29,6 +50,7 @@ export default async function DashboardPage() {
         name,
         email: user.email ?? "",
       }}
+      initialView={initialView}
     />
   );
 }

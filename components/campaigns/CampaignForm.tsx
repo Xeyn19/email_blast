@@ -11,57 +11,101 @@ type Contact = {
   email: string;
 };
 
-export function CampaignForm() {
+type CampaignFormProps = {
+  campaignId?: string;
+};
+
+export function CampaignForm({ campaignId }: CampaignFormProps) {
   const router = useRouter();
 
-  // Campaign fields
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [content, setContent] = useState("");
 
-  // Saving state
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [loadingCampaign, setLoadingCampaign] = useState(
+    Boolean(campaignId)
+  );
 
-  // Recipient selection
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(true);
   const [contactsError, setContactsError] = useState("");
 
-  // Load subscribed contacts
   useEffect(() => {
     let active = true;
 
-    async function loadContacts() {
+    async function loadFormData() {
       const supabase = createClient();
 
-      const { data, error } = await supabase
+      const contactsRequest = supabase
         .from("contacts")
         .select("id, full_name, email")
         .eq("status", "subscribed")
         .order("created_at", { ascending: false });
 
+      const campaignRequest = campaignId
+        ? supabase
+            .from("campaigns")
+            .select("*")
+            .eq("id", campaignId)
+            .single()
+        : null;
+
+      const { data: contactsData, error: contactsLoadError } =
+        await contactsRequest;
+
       if (!active) return;
 
-      if (error) {
-        setContactsError(error.message);
+      if (contactsLoadError) {
+        setContactsError(contactsLoadError.message);
       } else {
-        setContacts(data ?? []);
+        setContacts(contactsData ?? []);
       }
 
       setLoadingContacts(false);
+
+      if (campaignRequest) {
+        const { data: campaign, error: campaignError } =
+          await campaignRequest;
+
+        if (!active) return;
+
+        if (campaignError || !campaign) {
+          setError("Unable to load this campaign.");
+        } else if (campaign.status !== "draft") {
+          setError("Only draft campaigns can be edited.");
+        } else {
+          setName(campaign.name ?? "");
+          setSubject(campaign.subject ?? "");
+          setPreviewText(campaign.preview_text ?? "");
+          setSelectedContactIds(
+            campaign.recipient_contact_ids ?? []
+          );
+
+          const plainContent = (campaign.html_content ?? "")
+            .replace(/<br\s*\/?>/gi, "\n")
+            .replace(/<\/div>/gi, "\n")
+            .replace(/<[^>]*>/g, "");
+
+          const decoder = document.createElement("textarea");
+          decoder.innerHTML = plainContent;
+          setContent(decoder.value.trimEnd());
+        }
+
+        setLoadingCampaign(false);
+      }
     }
 
-    loadContacts();
+    loadFormData();
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [campaignId]);
 
-  // Select or deselect all contacts
   function handleSelectAll() {
     if (selectedContactIds.length === contacts.length) {
       setSelectedContactIds([]);
@@ -70,7 +114,6 @@ export function CampaignForm() {
     }
   }
 
-  // Save campaign as draft
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
@@ -97,25 +140,55 @@ export function CampaignForm() {
         .replace(/>/g, "&gt;")
         .replace(/\n/g, "<br>");
 
-      const { error: saveError } = await supabase
-        .from("campaigns")
-        .insert({
-          user_id: user.id,
-          name: name.trim(),
-          subject: subject.trim(),
-          preview_text: previewText.trim() || null,
-          html_content: `<div>${htmlContent}</div>`,
-          recipient_contact_ids: selectedContactIds,
-          status: "draft",
-        });
+      const campaignData = {
+        name: name.trim(),
+        subject: subject.trim(),
+        preview_text: previewText.trim() || null,
+        html_content: `<div>${htmlContent}</div>`,
+        recipient_contact_ids: selectedContactIds,
+      };
 
-      if (saveError) {
-        setError(saveError.message);
-        setSaving(false);
-        return;
+      if (campaignId) {
+        const { error: updateError } = await supabase
+          .from("campaigns")
+          .update({
+            ...campaignData,
+            brevo_list_id: null,
+            brevo_campaign_id: null,
+            brevo_synced_at: null,
+          })
+          .eq("id", campaignId)
+          .eq("user_id", user.id)
+          .eq("status", "draft");
+
+        if (updateError) {
+          setError(updateError.message);
+          setSaving(false);
+          return;
+        }
+
+        router.push(`/dashboard/campaigns/${campaignId}`);
+      } else {
+        const { data: newCampaign, error: saveError } =
+          await supabase
+            .from("campaigns")
+            .insert({
+              ...campaignData,
+              user_id: user.id,
+              status: "draft",
+            })
+            .select("id")
+            .single();
+
+        if (saveError || !newCampaign) {
+          setError(saveError?.message || "Unable to save campaign.");
+          setSaving(false);
+          return;
+        }
+
+        router.push(`/dashboard/campaigns/${newCampaign.id}`);
       }
 
-      router.push("/dashboard/campaigns");
       router.refresh();
     } catch {
       setError("Something went wrong while saving your campaign.");
@@ -123,59 +196,62 @@ export function CampaignForm() {
     }
   }
 
-  return (
-    <form onSubmit={handleSave} className="space-y-6">
+  if (loadingCampaign) {
+    return (
+      <p className="text-sm text-gray-400">
+        Loading campaign details...
+      </p>
+    );
+  }
 
-      {/* Campaign name */}
+  return (
+    <form
+      onSubmit={handleSave}
+      className="space-y-6 text-white"
+    >
       <div>
-        <label className="mb-2 block text-sm font-medium">
+        <label className="mb-2 block text-sm font-medium text-gray-200">
           Campaign name
         </label>
-
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. November Newsletter"
           required
-          className="w-full rounded-lg border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none focus:border-orange-500"
+          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
         />
       </div>
 
-      {/* Email subject */}
       <div>
-        <label className="mb-2 block text-sm font-medium">
+        <label className="mb-2 block text-sm font-medium text-gray-200">
           Email subject
         </label>
-
         <input
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
           placeholder="e.g. Our latest updates are here!"
           required
-          className="w-full rounded-lg border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none focus:border-orange-500"
+          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
         />
       </div>
 
-      {/* Preview text */}
       <div>
-        <label className="mb-2 block text-sm font-medium">
+        <label className="mb-2 block text-sm font-medium text-gray-200">
           Preview text
         </label>
-
         <input
           type="text"
           value={previewText}
           onChange={(e) => setPreviewText(e.target.value)}
           placeholder="A short summary shown in an inbox"
-          className="w-full rounded-lg border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none focus:border-orange-500"
+          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
         />
       </div>
 
-      {/* Recipient selection */}
       <div>
-        <label className="mb-3 block text-sm font-medium">
+        <label className="mb-3 block text-sm font-medium text-gray-200">
           Select Recipients
         </label>
 
@@ -188,14 +264,13 @@ export function CampaignForm() {
             Unable to load contacts: {contactsError}
           </p>
         ) : contacts.length === 0 ? (
-          <p className="rounded-lg border border-white/10 p-4 text-sm text-gray-400">
-            No subscribed contacts found. Add contacts and make sure their
-            status is subscribed before creating your campaign.
+          <p className="rounded-lg border border-white/10 bg-[#171717] p-4 text-sm text-gray-400">
+            No subscribed contacts found. Add contacts and make sure
+            their status is subscribed before creating your campaign.
           </p>
         ) : (
-          <div className="rounded-lg border border-white/10">
-
-            <div className="flex items-center justify-between border-b border-white/10 p-4">
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#171717]">
+            <div className="flex items-center justify-between border-b border-white/10 bg-[#1d1d1d] p-4">
               <span className="text-sm text-gray-400">
                 {selectedContactIds.length} of {contacts.length} selected
               </span>
@@ -203,7 +278,7 @@ export function CampaignForm() {
               <button
                 type="button"
                 onClick={handleSelectAll}
-                className="text-sm text-orange-400 hover:text-orange-300"
+                className="text-sm font-medium text-orange-400 transition hover:text-orange-300"
               >
                 {selectedContactIds.length === contacts.length
                   ? "Deselect All"
@@ -215,7 +290,7 @@ export function CampaignForm() {
               {contacts.map((contact) => (
                 <label
                   key={contact.id}
-                  className="flex cursor-pointer items-center gap-3 border-b border-white/5 p-4 last:border-0 hover:bg-white/[0.03]"
+                  className="flex cursor-pointer items-center gap-3 border-b border-white/5 p-4 last:border-0 transition hover:bg-white/[0.04]"
                 >
                   <input
                     type="checkbox"
@@ -227,14 +302,13 @@ export function CampaignForm() {
                           : current.filter((id) => id !== contact.id)
                       );
                     }}
-                    className="accent-orange-500"
+                    className="h-4 w-4 accent-orange-500"
                   />
 
                   <div>
-                    <p className="text-sm font-medium">
+                    <p className="text-sm font-medium text-white">
                       {contact.full_name || "Unnamed Contact"}
                     </p>
-
                     <p className="text-xs text-gray-400">
                       {contact.email}
                     </p>
@@ -242,53 +316,62 @@ export function CampaignForm() {
                 </label>
               ))}
             </div>
-
           </div>
         )}
       </div>
 
-      {/* Email content */}
       <div>
-        <label className="mb-2 block text-sm font-medium">
+        <label className="mb-2 block text-sm font-medium text-gray-200">
           Email content
         </label>
-
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder="Write your email message here..."
           required
           rows={12}
-          className="w-full resize-y rounded-lg border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none focus:border-orange-500"
+          className="w-full resize-y rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
         />
       </div>
 
-      {/* Error message */}
       {error && (
-        <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-400">
+        <p className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
           {error}
         </p>
       )}
 
-      {/* Form buttons */}
       <div className="flex flex-wrap gap-3">
         <button
           type="button"
-          onClick={() => router.push("/dashboard/campaigns")}
-          className="rounded-lg border border-white/10 px-5 py-3 text-white"
+          onClick={() =>
+            router.push(
+              campaignId
+                ? `/dashboard/campaigns/${campaignId}`
+                : "/dashboard/campaigns"
+            )
+          }
+          className="rounded-lg border border-white/15 px-5 py-3 text-gray-300 transition hover:bg-white/5 hover:text-white"
         >
           Cancel
         </button>
 
         <button
           type="submit"
-          disabled={saving}
-          className="rounded-lg bg-orange-500 px-5 py-3 font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+          disabled={
+            saving ||
+            loadingContacts ||
+            Boolean(contactsError) ||
+            selectedContactIds.length === 0
+          }
+          className="rounded-lg bg-orange-500 px-5 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {saving ? "Saving..." : "Save as Draft"}
+          {saving
+            ? "Saving..."
+            : campaignId
+              ? "Save Changes"
+              : "Save as Draft"}
         </button>
       </div>
-
     </form>
   );
 }
