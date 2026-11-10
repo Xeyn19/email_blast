@@ -34,8 +34,8 @@ async function NewCampaignContent() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0b0b0b] p-6 text-white md:p-10">
-      <div className="mx-auto max-w-4xl">
+    <main className="min-h-screen bg-[#0b0b0b] p-5 text-white md:p-8 lg:p-10">
+      <div className="mx-auto max-w-7xl">
         <Link
           href="/dashboard/campaigns"
           className="text-sm text-orange-400 hover:text-orange-300"
@@ -43,18 +43,13 @@ async function NewCampaignContent() {
           ← Back to Campaigns
         </Link>
 
-        <div className="mb-8 mt-6">
-          <h1 className="text-3xl font-bold">
-            Create a Campaign
-          </h1>
+        <div className="mb-6 mt-5">
+          <h1 className="text-3xl font-bold md:text-4xl">Create campaign</h1>
           <p className="mt-2 text-gray-400">
-            Prepare your email campaign and save it as a draft.
+            Compose your email, choose your audience, and decide when to deliver it.
           </p>
         </div>
-
-<div className="rounded-xl border border-white/10 bg-[#171717] p-6 md:p-8">
-          <CampaignForm />
-        </div>
+        <CampaignForm />
       </div>
     </main>
   );

@@ -1,377 +1,182 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { emailHtmlToText, textToEmailHtml } from "@/lib/campaigns/content";
 import { createClient } from "@/lib/supabase/client";
 
-type Contact = {
-  id: string;
-  full_name: string | null;
-  email: string;
+type Contact = { id: string; full_name: string | null; email: string };
+type DeliveryMode = "draft" | "cron";
+type CronSlot = {
+  loading: boolean;
+  available: boolean;
+  campaign: { id: string; name: string; armedAt: string } | null;
+  error: string;
 };
 
-type CampaignFormProps = {
-  campaignId?: string;
-};
-
-export function CampaignForm({ campaignId }: CampaignFormProps) {
+export function CampaignForm({ campaignId }: { campaignId?: string }) {
   const router = useRouter();
-
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [content, setContent] = useState("");
-
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [loadingCampaign, setLoadingCampaign] = useState(
-    Boolean(campaignId)
-  );
-
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
-  const [loadingContacts, setLoadingContacts] = useState(true);
-  const [contactsError, setContactsError] = useState("");
+  const [search, setSearch] = useState("");
+  const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("cron");
+  const [showPreview, setShowPreview] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [savingMode, setSavingMode] = useState<DeliveryMode | null>(null);
+  const [error, setError] = useState("");
+  const [recipientError, setRecipientError] = useState("");
+  const [savedDraftId, setSavedDraftId] = useState<string | null>(null);
+  const [conflictingCampaignId, setConflictingCampaignId] = useState<string | null>(null);
+  const [slot, setSlot] = useState<CronSlot>({ loading: true, available: false, campaign: null, error: "" });
 
   useEffect(() => {
     let active = true;
-
-    async function loadFormData() {
+    async function load() {
       const supabase = createClient();
-
-      const contactsRequest = supabase
-        .from("contacts")
-        .select("id, full_name, email")
-        .eq("status", "subscribed")
-        .order("created_at", { ascending: false });
-
-      const campaignRequest = campaignId
-        ? supabase
-            .from("campaigns")
-            .select("*")
-            .eq("id", campaignId)
-            .single()
-        : null;
-
-      const { data: contactsData, error: contactsLoadError } =
-        await contactsRequest;
-
+      const [contactsResult, campaignResult, slotResponse] = await Promise.all([
+        supabase.from("contacts").select("id, full_name, email").eq("status", "subscribed").order("created_at", { ascending: false }),
+        campaignId ? supabase.from("campaigns").select("*").eq("id", campaignId).single() : Promise.resolve({ data: null, error: null }),
+        fetch("/api/campaigns/cron-slot", { cache: "no-store" }),
+      ]);
       if (!active) return;
 
-      if (contactsLoadError) {
-        setContactsError(contactsLoadError.message);
-      } else {
-        setContacts(contactsData ?? []);
-      }
+      if (contactsResult.error) setError("Unable to load subscribed contacts.");
+      else setContacts(contactsResult.data ?? []);
 
-      setLoadingContacts(false);
-
-      if (campaignRequest) {
-        const { data: campaign, error: campaignError } =
-          await campaignRequest;
-
-        if (!active) return;
-
-        if (campaignError || !campaign) {
-          setError("Unable to load this campaign.");
-        } else if (campaign.status !== "draft") {
-          setError("Only draft campaigns can be edited.");
-        } else {
+      if (campaignId) {
+        const campaign = campaignResult.data;
+        if (campaignResult.error || !campaign) setError("Unable to load this campaign.");
+        else {
           setName(campaign.name ?? "");
           setSubject(campaign.subject ?? "");
           setPreviewText(campaign.preview_text ?? "");
-          setSelectedContactIds(
-            campaign.recipient_contact_ids ?? []
-          );
-
-          const plainContent = (campaign.html_content ?? "")
-            .replace(/<br\s*\/?>/gi, "\n")
-            .replace(/<\/div>/gi, "\n")
-            .replace(/<[^>]*>/g, "");
-
-          const decoder = document.createElement("textarea");
-          decoder.innerHTML = plainContent;
-          setContent(decoder.value.trimEnd());
+          setContent(emailHtmlToText(campaign.html_content ?? ""));
+          setSelectedContactIds(campaign.recipient_contact_ids ?? []);
         }
-
-        setLoadingCampaign(false);
       }
+
+      if (slotResponse.ok) {
+        const slotData = await slotResponse.json();
+        setSlot({ loading: false, available: slotData.available, campaign: slotData.campaign, error: "" });
+      } else setSlot({ loading: false, available: false, campaign: null, error: "Cron slot status is unavailable." });
+      setLoading(false);
     }
-
-    loadFormData();
-
-    return () => {
-      active = false;
-    };
+    load().catch(() => { if (active) { setError("Unable to load the campaign form."); setLoading(false); } });
+    return () => { active = false; };
   }, [campaignId]);
 
-  function handleSelectAll() {
-    if (selectedContactIds.length === contacts.length) {
-      setSelectedContactIds([]);
-    } else {
-      setSelectedContactIds(contacts.map((contact) => contact.id));
-    }
+  const filteredContacts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return query ? contacts.filter((contact) => `${contact.full_name ?? ""} ${contact.email}`.toLowerCase().includes(query)) : contacts;
+  }, [contacts, search]);
+
+  const allFilteredSelected = filteredContacts.length > 0 && filteredContacts.every((contact) => selectedContactIds.includes(contact.id));
+
+  function toggleFilteredContacts() {
+    const filteredIds = new Set(filteredContacts.map((contact) => contact.id));
+    setSelectedContactIds((current) => allFilteredSelected ? current.filter((id) => !filteredIds.has(id)) : [...new Set([...current, ...filteredIds])]);
   }
 
-  async function handleSave(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-
-    setSaving(true);
+  async function saveCampaign(mode: DeliveryMode) {
     setError("");
+    setRecipientError("");
+    setSavedDraftId(null);
+    setConflictingCampaignId(null);
+    if (selectedContactIds.length === 0) {
+      setRecipientError("Select at least one subscribed recipient.");
+      document.getElementById("campaign-audience")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
 
+    setSavingMode(mode);
+    const payload = { name, subject, previewText, content, recipientContactIds: selectedContactIds, deliveryMode: mode };
     try {
-      const supabase = createClient();
+      let response: Response;
+      if (campaignId) {
+        response = await fetch(`/api/campaigns/${campaignId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+        if (response.ok && mode === "cron") response = await fetch(`/api/campaigns/${campaignId}/cron`, { method: "POST" });
+      } else {
+        response = await fetch("/api/campaigns", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      }
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        setError("Your session has expired. Please log in again.");
-        setSaving(false);
+      const result = await response.json();
+      if (!response.ok) {
+        setError(result.error || "Unable to save this campaign.");
+        setSavedDraftId(result.savedAsDraft ? result.campaignId : null);
+        setConflictingCampaignId(result.conflictingCampaignId ?? null);
         return;
       }
-
-      const htmlContent = content
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\n/g, "<br>");
-
-      const campaignData = {
-        name: name.trim(),
-        subject: subject.trim(),
-        preview_text: previewText.trim() || null,
-        html_content: `<div>${htmlContent}</div>`,
-        recipient_contact_ids: selectedContactIds,
-      };
-
-      if (campaignId) {
-        const { error: updateError } = await supabase
-          .from("campaigns")
-          .update({
-            ...campaignData,
-            brevo_list_id: null,
-            brevo_campaign_id: null,
-            brevo_synced_at: null,
-          })
-          .eq("id", campaignId)
-          .eq("user_id", user.id)
-          .eq("status", "draft");
-
-        if (updateError) {
-          setError(updateError.message);
-          setSaving(false);
-          return;
-        }
-
-        router.push(`/dashboard/campaigns/${campaignId}`);
-      } else {
-        const { data: newCampaign, error: saveError } =
-          await supabase
-            .from("campaigns")
-            .insert({
-              ...campaignData,
-              user_id: user.id,
-              status: "draft",
-            })
-            .select("id")
-            .single();
-
-        if (saveError || !newCampaign) {
-          setError(saveError?.message || "Unable to save campaign.");
-          setSaving(false);
-          return;
-        }
-
-        router.push(`/dashboard/campaigns/${newCampaign.id}`);
-      }
-
+      router.push(`/dashboard/campaigns/${result.campaignId ?? campaignId}`);
       router.refresh();
     } catch {
-      setError("Something went wrong while saving your campaign.");
-      setSaving(false);
+      setError("The campaign could not be saved. Check your connection and try again.");
+    } finally {
+      setSavingMode(null);
     }
   }
 
-  if (loadingCampaign) {
-    return (
-      <p className="text-sm text-gray-400">
-        Loading campaign details...
-      </p>
-    );
-  }
+  if (loading) return <p className="py-12 text-sm text-gray-400">Loading campaign details…</p>;
 
   return (
-    <form
-      onSubmit={handleSave}
-      className="space-y-6 text-white"
-    >
-      <div>
-        <label className="mb-2 block text-sm font-medium text-gray-200">
-          Campaign name
-        </label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. November Newsletter"
-          required
-          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-        />
-      </div>
+    <form className="campaign-workflow" onSubmit={(event) => { event.preventDefault(); void saveCampaign(deliveryMode); }}>
+      <WorkflowSection number="1" title="Campaign details" description="Give your campaign a clear name and set the email subject and preview text.">
+        <Field label="Campaign name" required><input value={name} onChange={(event) => setName(event.target.value)} required placeholder="e.g. November Newsletter" className="campaign-input" /></Field>
+        <Field label="Email subject" required><input value={subject} onChange={(event) => setSubject(event.target.value)} required placeholder="e.g. What’s new at XMETA this November" className="campaign-input" /></Field>
+        <Field label="Preview text (optional)" help="A short summary shown in inboxes after the subject."><input value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A quick update on our latest news and upcoming events" className="campaign-input" /></Field>
+      </WorkflowSection>
 
-      <div>
-        <label className="mb-2 block text-sm font-medium text-gray-200">
-          Email subject
-        </label>
-        <input
-          type="text"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder="e.g. Our latest updates are here!"
-          required
-          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-        />
-      </div>
+      <WorkflowSection id="campaign-audience" number="2" title="Audience" description="Choose the subscribed contacts who should receive this campaign.">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contacts by name or email" aria-label="Search contacts by name or email" className="campaign-input" />
+        <div className="audience-toolbar"><button type="button" onClick={toggleFilteredContacts}>{allFilteredSelected ? "Deselect all results" : "Select all results"}</button><strong>{selectedContactIds.length} recipients selected</strong></div>
+        <div className="audience-list">
+          {filteredContacts.length === 0 ? <p className="p-5 text-sm text-gray-400">No subscribed contacts match this search.</p> : filteredContacts.map((contact) => (
+            <label key={contact.id} className="audience-row">
+              <input type="checkbox" checked={selectedContactIds.includes(contact.id)} onChange={(event) => setSelectedContactIds((current) => event.target.checked ? [...new Set([...current, contact.id])] : current.filter((id) => id !== contact.id))} />
+              <span><strong>{contact.full_name || "Unnamed contact"}</strong><small>{contact.email}</small></span>
+            </label>
+          ))}
+        </div>
+        {recipientError && <p role="alert" className="mt-3 text-sm text-red-300">{recipientError}</p>}
+      </WorkflowSection>
 
-      <div>
-        <label className="mb-2 block text-sm font-medium text-gray-200">
-          Preview text
-        </label>
-        <input
-          type="text"
-          value={previewText}
-          onChange={(e) => setPreviewText(e.target.value)}
-          placeholder="A short summary shown in an inbox"
-          className="w-full rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-        />
-      </div>
+      <WorkflowSection number="3" title="Message" description="Write the email content to send to your audience.">
+        <div className="flex items-center justify-between gap-4"><label htmlFor="campaign-content" className="text-sm font-semibold text-gray-100">Email content <span className="text-orange-400">*</span></label><button type="button" onClick={() => setShowPreview((current) => !current)} className="campaign-secondary-button">{showPreview ? "Hide preview" : "Preview email"}</button></div>
+        <textarea id="campaign-content" value={content} onChange={(event) => setContent(event.target.value)} required rows={10} placeholder="Write your email message here…" className="campaign-input mt-3 resize-y" />
+        <p className="mt-2 text-xs text-gray-500">Write the full email in plain text. Line breaks are preserved.</p>
+        {showPreview && <iframe title="Campaign email preview" sandbox="" srcDoc={textToEmailHtml(content || "Your email preview will appear here.")} className="mt-4 min-h-72 w-full rounded-xl border border-white/10 bg-white" />}
+      </WorkflowSection>
 
-      <div>
-        <label className="mb-3 block text-sm font-medium text-gray-200">
-          Select Recipients
-        </label>
+      <WorkflowSection number="4" title="Delivery" description="Prepare this campaign for your existing cron job. Only one campaign can wait at a time.">
+        <fieldset className="space-y-3"><legend className="sr-only">Delivery method</legend><DeliveryOption checked={deliveryMode === "draft"} onChange={() => setDeliveryMode("draft")} title="Save as draft" description="Keep editing or review it later." /><DeliveryOption checked={deliveryMode === "cron"} onChange={() => setDeliveryMode("cron")} title="Prepare for cron" description="Prepare the recipients and email in Brevo, then arm this campaign for the next cron run." /></fieldset>
+        <div className={`cron-slot-state ${slot.available ? "cron-slot-available" : "cron-slot-occupied"}`}><span aria-hidden="true">{slot.loading ? "…" : slot.available ? "✓" : "!"}</span><div><strong>{slot.loading ? "Checking cron slot…" : slot.available ? "Cron slot available" : "Cron slot occupied"}</strong>{slot.campaign && slot.campaign.id !== campaignId && <Link href={`/dashboard/campaigns/${slot.campaign.id}`}>View {slot.campaign.name}</Link>}{slot.error && <small>{slot.error}</small>}</div></div>
+        <div className="cron-steps" aria-label="Cron delivery steps"><span><b>1</b> Prepare campaign</span><span><b>2</b> Wait for cron-job.org</span><span><b>3</b> Send once automatically</span></div>
+      </WorkflowSection>
 
-        {loadingContacts ? (
-          <p className="text-sm text-gray-400">
-            Loading subscribed contacts...
-          </p>
-        ) : contactsError ? (
-          <p className="text-sm text-red-400">
-            Unable to load contacts: {contactsError}
-          </p>
-        ) : contacts.length === 0 ? (
-          <p className="rounded-lg border border-white/10 bg-[#171717] p-4 text-sm text-gray-400">
-            No subscribed contacts found. Add contacts and make sure
-            their status is subscribed before creating your campaign.
-          </p>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#171717]">
-            <div className="flex items-center justify-between border-b border-white/10 bg-[#1d1d1d] p-4">
-              <span className="text-sm text-gray-400">
-                {selectedContactIds.length} of {contacts.length} selected
-              </span>
+      {error && <div role="alert" className="campaign-error"><strong>Campaign not ready</strong><p>{error}</p><div className="mt-2 flex flex-wrap gap-3">{savedDraftId && <Link href={`/dashboard/campaigns/${savedDraftId}`}>Open saved draft</Link>}{conflictingCampaignId && <Link href={`/dashboard/campaigns/${conflictingCampaignId}`}>View campaign waiting for cron</Link>}</div></div>}
 
-              <button
-                type="button"
-                onClick={handleSelectAll}
-                className="text-sm font-medium text-orange-400 transition hover:text-orange-300"
-              >
-                {selectedContactIds.length === contacts.length
-                  ? "Deselect All"
-                  : "Select All"}
-              </button>
-            </div>
-
-            <div className="max-h-64 overflow-y-auto">
-              {contacts.map((contact) => (
-                <label
-                  key={contact.id}
-                  className="flex cursor-pointer items-center gap-3 border-b border-white/5 p-4 last:border-0 transition hover:bg-white/[0.04]"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedContactIds.includes(contact.id)}
-                    onChange={(e) => {
-                      setSelectedContactIds((current) =>
-                        e.target.checked
-                          ? [...current, contact.id]
-                          : current.filter((id) => id !== contact.id)
-                      );
-                    }}
-                    className="h-4 w-4 accent-orange-500"
-                  />
-
-                  <div>
-                    <p className="text-sm font-medium text-white">
-                      {contact.full_name || "Unnamed Contact"}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {contact.email}
-                    </p>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-gray-200">
-          Email content
-        </label>
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder="Write your email message here..."
-          required
-          rows={12}
-          className="w-full resize-y rounded-lg border border-white/10 bg-[#171717] px-4 py-3 text-white placeholder:text-gray-500 outline-none transition focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-        />
-      </div>
-
-      {error && (
-        <p className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
-          {error}
-        </p>
-      )}
-
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() =>
-            router.push(
-              campaignId
-                ? `/dashboard/campaigns/${campaignId}`
-                : "/dashboard/campaigns"
-            )
-          }
-          className="rounded-lg border border-white/15 px-5 py-3 text-gray-300 transition hover:bg-white/5 hover:text-white"
-        >
-          Cancel
-        </button>
-
-        <button
-          type="submit"
-          disabled={
-            saving ||
-            loadingContacts ||
-            Boolean(contactsError) ||
-            selectedContactIds.length === 0
-          }
-          className="rounded-lg bg-orange-500 px-5 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {saving
-            ? "Saving..."
-            : campaignId
-              ? "Save Changes"
-              : "Save as Draft"}
-        </button>
+      <div className="campaign-form-actions" aria-live="polite">
+        <button type="button" onClick={() => router.push(campaignId ? `/dashboard/campaigns/${campaignId}` : "/dashboard/campaigns")} className="campaign-cancel-button">Cancel</button>
+        <button type="button" disabled={Boolean(savingMode)} onClick={() => void saveCampaign("draft")} className="campaign-secondary-button">{savingMode === "draft" ? "Saving…" : "Save draft"}</button>
+        <span className="campaign-send-note">ⓘ This does not send the email.</span>
+        <button type="submit" disabled={Boolean(savingMode) || slot.loading || (deliveryMode === "cron" && !slot.available && slot.campaign?.id !== campaignId)} className="campaign-primary-button">{savingMode === "cron" ? "Preparing campaign…" : deliveryMode === "cron" ? "Prepare for cron" : "Save draft"}</button>
       </div>
     </form>
   );
+}
+
+function WorkflowSection({ id, number, title, description, children }: { id?: string; number: string; title: string; description: string; children: React.ReactNode }) {
+  return <section id={id} className="workflow-section"><div className="workflow-heading"><span>{number}</span><div><h2>{title}</h2><p>{description}</p></div></div><div className="workflow-content">{children}</div></section>;
+}
+
+function Field({ label, help, required, children }: { label: string; help?: string; required?: boolean; children: React.ReactNode }) {
+  return <label className="campaign-field"><span>{label} {required && <b>*</b>}</span>{children}{help && <small>{help}</small>}</label>;
+}
+
+function DeliveryOption({ checked, onChange, title, description }: { checked: boolean; onChange: () => void; title: string; description: string }) {
+  return <label className="delivery-option"><input type="radio" name="delivery" checked={checked} onChange={onChange} /><span><strong>{title}</strong><small>{description}</small></span></label>;
 }

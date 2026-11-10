@@ -1,234 +1,96 @@
-
-import { SyncBrevoButton } from "@/components/campaigns/SyncBrevoButton";
-import { CreateBrevoCampaignButton } from "@/components/campaigns/CreateBrevoCampaignButton";
-import { SendBrevoCampaignButton } from "@/components/campaigns/SendBrevoCampaignButton";
-import { CheckBrevoStatusButton } from "@/components/campaigns/CheckBrevoStatusButton";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { CampaignCronControls } from "@/components/campaigns/CampaignCronControls";
+import { CampaignStatusPoller } from "@/components/campaigns/CampaignStatusPoller";
 import { createClient } from "@/lib/supabase/server";
 
-type PageProps = {
-  params: Promise<{ id: string }>;
-};
+type PageProps = { params: Promise<{ id: string }> };
 
 export default function CampaignDetailsPage({ params }: PageProps) {
-  return (
-    <Suspense
-      fallback={
-        <div className="p-8 text-gray-400">
-          Loading campaign...
-        </div>
-      }
-    >
-      <CampaignDetailsContent params={params} />
-    </Suspense>
-  );
+  return <Suspense fallback={<div className="p-8 text-gray-400">Loading campaign…</div>}><CampaignDetailsContent params={params} /></Suspense>;
 }
 
 async function CampaignDetailsContent({ params }: PageProps) {
   await connection();
-
   const { id } = await params;
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/");
 
-  const { data: campaign, error } = await supabase
-    .from("campaigns")
-    .select("*")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
+  const { data: campaign, error } = await supabase.from("campaigns").select("*").eq("id", id).eq("user_id", user.id).single();
   if (error || !campaign) notFound();
 
-  const recipientIds = campaign.recipient_contact_ids ?? [];
+  const recipientIds: string[] = campaign.recipient_contact_ids ?? [];
+  const { data: recipients } = recipientIds.length
+    ? await supabase.from("contacts").select("id, full_name, email, status").eq("user_id", user.id).in("id", recipientIds)
+    : { data: [] };
 
-  let recipients: {
-    id: string;
-    full_name: string | null;
-    email: string;
-    status: string;
-  }[] = [];
-
-  if (recipientIds.length > 0) {
-    const { data } = await supabase
-      .from("contacts")
-      .select("id, full_name, email, status")
-      .in("id", recipientIds);
-
-    recipients = data ?? [];
-  }
+  const armed = Boolean(campaign.cron_armed_at);
+  const prepared = Boolean(campaign.brevo_synced_at && campaign.brevo_list_id && campaign.brevo_campaign_id);
+  const statusLabel = armed ? "Waiting for cron" : campaign.status === "failed" ? "Needs attention" : campaign.status === "sending" ? "Sending" : campaign.status === "sent" ? "Sent" : prepared ? "Prepared" : "Draft";
+  const preparedAt = campaign.cron_armed_at || campaign.brevo_synced_at;
 
   return (
-    <div className="min-h-screen bg-[#0b0b0b] p-6 text-white md:p-10">
-      <div className="mx-auto max-w-5xl space-y-8">
+    <main className="min-h-screen bg-[#0b0b0b] p-5 text-white md:p-8 lg:p-10">
+      <div className="mx-auto max-w-7xl">
+        <Link href="/dashboard/campaigns" className="text-sm text-gray-300 transition hover:text-white">← Back to campaigns</Link>
 
-        {/* Campaign Header */}
-        <div>
-          <Link
-            href="/dashboard/campaigns"
-            className="text-sm font-medium text-orange-400 hover:text-orange-300"
-          >
-            ← Back to Campaigns
-          </Link>
+        <header className="campaign-detail-header">
+          <div><h1>{campaign.name}</h1><p>Campaign details and delivery status.</p></div>
+          <span className={`campaign-detail-status status-${campaign.status}`}>{statusLabel}</span>
+          {campaign.status === "draft" && !armed && <Link href={`/dashboard/campaigns/${campaign.id}/edit`} className="campaign-secondary-button">Edit campaign</Link>}
+        </header>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold text-white">
-                {campaign.name}
-              </h1>
-              <p className="mt-2 text-sm text-gray-400">
-                Campaign details and recipients
-              </p>
+        {armed ? (
+          <section className="armed-campaign-panel">
+            <div className="armed-campaign-main">
+              <div className="armed-icon" aria-hidden="true">◷</div>
+              <div><h2>Ready for the next cron run</h2><p>This campaign is prepared and armed. Your existing cron-job.org schedule will trigger delivery.</p><div className="armed-meta"><span>{recipientIds.length} recipients</span><span>Prepared {formatManilaDate(preparedAt)}</span></div></div>
+              <CampaignCronControls campaignId={campaign.id} armed canPrepare={false} />
             </div>
+            <div className="armed-notice">ⓘ The email has not been sent yet.</div>
+          </section>
+        ) : campaign.status === "draft" ? (
+          <section className="armed-campaign-panel">
+            <div className="armed-campaign-main"><div className="armed-icon" aria-hidden="true">✓</div><div><h2>{prepared ? "Campaign prepared" : "Draft campaign"}</h2><p>{prepared ? "The Brevo draft is ready. Arm it for your next cron run when you are ready." : "Review the campaign, then prepare it for your fixed cron job."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></div>
+          </section>
+        ) : null}
 
-            <div className="flex flex-wrap items-center gap-3">
-              {campaign.status === "draft" && (
-                <Link
-                  href={`/dashboard/campaigns/${campaign.id}/edit`}
-                  className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
-                >
-                  Edit Draft
-                </Link>
-              )}
+        {campaign.status === "failed" && <section className="campaign-failure-panel"><div><h2>Delivery needs attention</h2><p>{campaign.last_error || "Brevo could not complete this delivery. Review the campaign before another attempt."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></section>}
 
-              <span className="rounded-full border border-orange-500/20 bg-orange-500/10 px-4 py-2 text-sm font-semibold capitalize text-orange-400">
-                {campaign.status}
-              </span>
-            </div>
-          </div>
-        </div>
+        <CampaignLifecycle status={campaign.status} armed={armed} prepared={prepared} />
+        <CampaignStatusPoller campaignId={campaign.id} active={campaign.status === "sending"} />
 
-        {/* Campaign Information */}
-        <section className="rounded-xl border border-white/10 bg-[#171717] p-6">
-          <h2 className="mb-5 text-lg font-bold text-white">
-            Campaign Information
-          </h2>
-
-          <div className="space-y-4">
-            <div>
-              <p className="text-sm text-gray-400">Campaign Name</p>
-              <p className="font-medium text-white">{campaign.name}</p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-400">Email Subject</p>
-              <p className="font-medium text-white">
-                {campaign.subject || "No subject"}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-400">Preview Text</p>
-              <p className="font-medium text-white">
-                {campaign.preview_text || "No preview text"}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-400">Created</p>
-              <p className="font-medium text-white">
-                {new Date(campaign.created_at).toLocaleString()}
-              </p>
-            </div>
-          </div>
+        <section className="campaign-detail-section">
+          <div className="campaign-detail-section-heading"><span>1</span><div><h2>Email preview</h2><p>See the email content that will be sent to your audience.</p></div></div>
+          <iframe title="Campaign email preview" sandbox="" srcDoc={campaign.html_content || "<p>No email content.</p>"} className="min-h-[360px] w-full rounded-xl border border-white/10 bg-white" />
         </section>
 
-        {/* Selected Recipients */}
-        <section className="rounded-xl border border-white/10 bg-[#171717] p-6">
-          <h2 className="mb-2 text-lg font-bold text-white">
-            Selected Recipients
-          </h2>
-
-          <p className="mb-5 text-sm text-gray-400">
-            {recipientIds.length} selected contact(s)
-          </p>
-
-          {recipients.length === 0 ? (
-            <p className="text-sm text-gray-400">
-              No recipients were found for this campaign.
-            </p>
-          ) : (
-            <div className="divide-y divide-white/10">
-              {recipients.map((contact) => (
-                <div
-                  key={contact.id}
-                  className="flex flex-wrap items-center justify-between gap-3 py-3"
-                >
-                  <div>
-                    <p className="font-medium text-white">
-                      {contact.full_name || "Unnamed Contact"}
-                    </p>
-                    <p className="text-sm text-gray-400">
-                      {contact.email}
-                    </p>
-                  </div>
-
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium capitalize text-gray-300">
-                    {contact.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+        <section className="campaign-detail-section">
+          <div className="campaign-detail-section-heading"><span>2</span><div><h2>Audience summary</h2><p>The subscribed recipients who will receive this campaign.</p></div></div>
+          <div className="detail-list"><strong>{recipientIds.length} recipients</strong>{(recipients ?? []).slice(0, 5).map((contact) => <div key={contact.id}><span>{contact.full_name || "Unnamed contact"}</span><small>{contact.email}</small></div>)}</div>
         </section>
 
-        {/* Email Content */}
-        <section className="rounded-xl border border-white/10 bg-[#171717] p-6">
-          <h2 className="mb-4 text-lg font-bold text-white">
-            Email Content
-          </h2>
-
-          <iframe
-            title="Campaign email preview"
-            sandbox=""
-            srcDoc={campaign.html_content || "<p>No email content.</p>"}
-            className="min-h-[350px] w-full rounded-lg border border-white/10 bg-white"
-          />
+        <section className="campaign-detail-section">
+          <div className="campaign-detail-section-heading"><span>3</span><div><h2>Campaign details</h2><p>Core information about this campaign.</p></div></div>
+          <dl className="campaign-detail-grid"><div><dt>Campaign name</dt><dd>{campaign.name}</dd></div><div><dt>Email subject</dt><dd>{campaign.subject}</dd></div><div><dt>Preview text</dt><dd>{campaign.preview_text || "No preview text"}</dd></div><div><dt>Created</dt><dd>{formatManilaDate(campaign.created_at)}</dd></div></dl>
         </section>
 
-        {/* Brevo Actions */}
-        <section className="rounded-xl border border-white/10 bg-[#171717] p-6">
-          <h2 className="mb-4 text-lg font-bold text-white">
-            Brevo Campaign Actions
-          </h2>
-
-          <div className="flex flex-wrap justify-end gap-3">
-            <SyncBrevoButton campaignId={campaign.id} />
-
-            <CreateBrevoCampaignButton
-              campaignId={campaign.id}
-              canCreate={
-                campaign.status === "draft" &&
-                Boolean(campaign.brevo_synced_at) &&
-                !campaign.brevo_campaign_id
-              }
-            />
-
-            <SendBrevoCampaignButton
-              campaignId={campaign.id}
-              canSend={
-                campaign.status === "draft" &&
-                Boolean(campaign.brevo_synced_at) &&
-                Boolean(campaign.brevo_campaign_id)
-              }
-            />
-
-            <CheckBrevoStatusButton
-              campaignId={campaign.id}
-              canCheck={Boolean(campaign.brevo_campaign_id)}
-            />
-          </div>
-        </section>
-
+        <details className="technical-details"><summary><span>4</span><strong>Technical details</strong><small>System information for troubleshooting and support.</small></summary><dl><div><dt>Brevo list</dt><dd>{campaign.brevo_list_id || "Not prepared"}</dd></div><div><dt>Brevo campaign</dt><dd>{campaign.brevo_campaign_id || "Not prepared"}</dd></div><div><dt>Last status check</dt><dd>{formatManilaDate(campaign.status_checked_at)}</dd></div></dl></details>
       </div>
-    </div>
+    </main>
   );
+}
+
+function CampaignLifecycle({ status, armed, prepared }: { status: string; armed: boolean; prepared: boolean }) {
+  const current = status === "sent" ? 4 : status === "sending" ? 3 : armed ? 2 : prepared ? 1 : 0;
+  const steps = ["Draft", "Prepared", "Waiting for cron", "Sending", "Sent"];
+  return <ol className="campaign-lifecycle" aria-label="Campaign delivery progress">{steps.map((step, index) => <li key={step} className={index < current ? "complete" : index === current ? "current" : ""}><span>{index < current ? "✓" : index + 1}</span><strong>{step}</strong></li>)}</ol>;
+}
+
+function formatManilaDate(value: string | null | undefined) {
+  if (!value) return "Not available";
+  return new Intl.DateTimeFormat("en-PH", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Manila" }).format(new Date(value));
 }
