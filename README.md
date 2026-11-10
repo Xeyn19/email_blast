@@ -34,3 +34,19 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Fixed cron campaign delivery
+
+EmailBlast uses one global campaign slot and one permanent cron-job.org URL. A dashboard user prepares one campaign for cron; the next cron request atomically claims that campaign and asks Brevo to send it once.
+
+1. Apply the SQL migration in `supabase/migrations` to the project database.
+2. Add `SUPABASE_SERVICE_ROLE_KEY` and a long random `CRON_SECRET` to local and Vercel environment settings. Keep both server-only.
+3. Configure one cron-job.org job:
+
+```text
+Method: POST
+URL: https://email-blast-xmeta.vercel.app/api/cron/campaigns/send?token=<CRON_SECRET>
+Body: none
+```
+
+The endpoint returns a safe success response when the slot is empty. Do not log, share, or expose the complete URL because its query token authorizes delivery.

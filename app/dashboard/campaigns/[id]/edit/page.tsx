@@ -38,20 +38,20 @@ async function EditCampaignContent({ params }: PageProps) {
 
   const { data: campaign, error } = await supabase
     .from("campaigns")
-    .select("id, status")
+    .select("id, status, cron_armed_at")
     .eq("id", id)
     .eq("user_id", user.id)
     .single();
 
   if (error || !campaign) notFound();
 
-  if (campaign.status !== "draft") {
+  if (campaign.status !== "draft" || campaign.cron_armed_at) {
     redirect(`/dashboard/campaigns/${id}`);
   }
 
   return (
     <main className="min-h-screen bg-[#0b0b0b] p-6 text-white md:p-10">
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-7xl">
         <Link
           href={`/dashboard/campaigns/${id}`}
           className="text-sm text-orange-400 hover:text-orange-300"
@@ -66,9 +66,7 @@ async function EditCampaignContent({ params }: PageProps) {
           </p>
         </div>
 
-<div className="rounded-xl border border-white/10 bg-[#171717] p-6 md:p-8">
-          <CampaignForm campaignId={campaign.id} />
-        </div>
+        <CampaignForm campaignId={campaign.id} />
       </div>
     </main>
   );
