@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { emailHtmlToText, textToEmailHtml } from "@/lib/campaigns/content";
+import { getCampaignDetailsFromTemplate } from "@/lib/email-templates/campaign-defaults";
 import {
   RECIPIENT_NAME_TOKEN,
   renderRecipientPreview,
@@ -24,6 +25,9 @@ type SavedEmailTemplate = {
   sourceFilename: string;
   htmlContent: string;
   assetUrls: string[];
+  defaultCampaignName?: string | null;
+  defaultSubject?: string | null;
+  defaultPreviewText?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -162,6 +166,28 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
         : activeTemplate.htmlContent
       : textToEmailHtml(content || "Your email preview will appear here.");
 
+  function applyTemplateDefaults(template: SavedEmailTemplate) {
+    const defaults = getCampaignDetailsFromTemplate(template);
+    setName(defaults.name);
+    setSubject(defaults.subject);
+    setPreviewText(defaults.previewText);
+  }
+
+  function selectMessageMode(nextMode: MessageMode) {
+    setMessageMode(nextMode);
+    if (nextMode === "template" && activeTemplate) {
+      applyTemplateDefaults(activeTemplate);
+    }
+  }
+
+  function selectTemplate(nextTemplateId: string) {
+    setTemplateId(nextTemplateId);
+    const nextTemplate = templates.find(
+      (template) => template.id === nextTemplateId
+    );
+    if (nextTemplate) applyTemplateDefaults(nextTemplate);
+  }
+
   function toggleFilteredContacts() {
     const filteredIds = new Set(filteredContacts.map((contact) => contact.id));
     setSelectedContactIds((current) => allFilteredSelected ? current.filter((id) => !filteredIds.has(id)) : [...new Set([...current, ...filteredIds])]);
@@ -193,6 +219,7 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
       const uploaded = result.template as SavedEmailTemplate;
       setTemplates((current) => [uploaded, ...current]);
       setTemplateId(uploaded.id);
+      applyTemplateDefaults(uploaded);
       setTemplateName("");
       setTemplateFile(null);
     } catch {
@@ -220,7 +247,9 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
         (template) => template.id !== activeTemplate.id
       );
       setTemplates(remaining);
-      setTemplateId(remaining[0]?.id ?? "");
+      const nextTemplate = remaining[0] ?? null;
+      setTemplateId(nextTemplate?.id ?? "");
+      if (nextTemplate) applyTemplateDefaults(nextTemplate);
     } catch {
       setTemplateError("Unable to archive the template. Try again.");
     } finally {
@@ -284,34 +313,11 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
 
   return (
     <form className="campaign-workflow" onSubmit={(event) => { event.preventDefault(); void saveCampaign(deliveryMode); }}>
-      <WorkflowSection number="1" title="Campaign details" description="Give your campaign a clear name and set the email subject and preview text.">
-        <Field label="Campaign name" required><input value={name} onChange={(event) => setName(event.target.value)} required placeholder="e.g. November Newsletter" className="campaign-input" /></Field>
-        <Field label="Email subject" required><input value={subject} onChange={(event) => setSubject(event.target.value)} required placeholder="e.g. What’s new at XMETA this November" className="campaign-input" /></Field>
-        <Field label="Preview text (optional)" help="A short summary shown in inboxes after the subject."><input value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A quick update on our latest news and upcoming events" className="campaign-input" /></Field>
-      </WorkflowSection>
-
-      <WorkflowSection id="campaign-audience" number="2" title="Audience" description="Choose the subscribed contacts who should receive this campaign.">
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contacts by name or email" aria-label="Search contacts by name or email" className="campaign-input" />
-        <div className="audience-toolbar"><button type="button" onClick={toggleFilteredContacts}>{allFilteredSelected ? "Deselect all results" : "Select all results"}</button><strong>{selectedContactIds.length} recipients selected</strong></div>
-        <div className="audience-list">
-          {filteredContacts.length === 0 ? <p className="p-5 text-sm text-gray-400">No subscribed contacts match this search.</p> : filteredContacts.map((contact) => (
-            <label key={contact.id} className="audience-row">
-              <input type="checkbox" checked={selectedContactIds.includes(contact.id)} onChange={(event) => setSelectedContactIds((current) => event.target.checked ? [...new Set([...current, contact.id])] : current.filter((id) => id !== contact.id))} />
-              <span>
-                <strong>{contact.full_name || contact.company || "Unnamed contact"}</strong>
-                <small>{contact.email}{contact.full_name && contact.company ? ` · ${contact.company}` : ""}</small>
-              </span>
-            </label>
-          ))}
-        </div>
-        {recipientError && <p role="alert" className="mt-3 text-sm text-red-300">{recipientError}</p>}
-      </WorkflowSection>
-
-      <WorkflowSection id="campaign-message" number="3" title="Message" description="Choose a saved HTML template or write a plain-text email.">
+      <WorkflowSection id="campaign-message" number="1" title="Email setup" description="Choose an HTML template or write a plain-text email first.">
         <fieldset className="grid gap-3 sm:grid-cols-2">
           <legend className="sr-only">Message type</legend>
-          <DeliveryOption name="message-mode" checked={messageMode === "template"} onChange={() => setMessageMode("template")} title="Use HTML template" description="Use a designed campaign, with optional recipient-name personalization." />
-          <DeliveryOption name="message-mode" checked={messageMode === "manual"} onChange={() => setMessageMode("manual")} title="Write message" description="Write a plain-text email using the existing editor." />
+          <DeliveryOption name="message-mode" checked={messageMode === "template"} onChange={() => selectMessageMode("template")} title="Use HTML template" description="Use a designed campaign and automatically fill its campaign details." />
+          <DeliveryOption name="message-mode" checked={messageMode === "manual"} onChange={() => selectMessageMode("manual")} title="Write message" description="Write a plain-text email and enter its details manually." />
         </fieldset>
 
         {messageMode === "template" ? (
@@ -320,7 +326,7 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
               <div className="flex flex-col gap-3 sm:flex-row">
                 <select
                   value={templateId}
-                  onChange={(event) => setTemplateId(event.target.value)}
+                  onChange={(event) => selectTemplate(event.target.value)}
                   className="campaign-input flex-1"
                   disabled={templatesLoading || templates.length === 0}
                 >
@@ -387,6 +393,34 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
           <button type="button" onClick={() => setShowPreview((current) => !current)} className="campaign-secondary-button">{showPreview ? "Hide preview" : "Preview email"}</button>
         </div>
         {showPreview && <iframe title="Campaign email preview" sandbox="" srcDoc={emailPreviewHtml} className="mt-4 min-h-[36rem] w-full rounded-xl border border-white/10 bg-white" />}
+      </WorkflowSection>
+
+      <WorkflowSection number="2" title="Campaign details" description="Review the campaign name and the Gmail subject and preview text.">
+        {messageMode === "template" && activeTemplate ? (
+          <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+            <strong>{activeTemplate.name}</strong> provides automatic defaults for these details. You can edit the values for this campaign.
+          </p>
+        ) : null}
+        <Field label="Campaign name" required><input value={name} onChange={(event) => setName(event.target.value)} required placeholder="e.g. November Newsletter" className="campaign-input" /></Field>
+        <Field label="Email subject" required><input value={subject} onChange={(event) => setSubject(event.target.value)} required placeholder="e.g. What’s new at XMETA this November" className="campaign-input" /></Field>
+        <Field label="Preview text (optional)" help="A short summary shown in inboxes after the subject."><input value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="A quick update on our latest news and upcoming events" className="campaign-input" /></Field>
+      </WorkflowSection>
+
+      <WorkflowSection id="campaign-audience" number="3" title="Audience" description="Choose the subscribed contacts who should receive this campaign.">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contacts by name or email" aria-label="Search contacts by name or email" className="campaign-input" />
+        <div className="audience-toolbar"><button type="button" onClick={toggleFilteredContacts}>{allFilteredSelected ? "Deselect all results" : "Select all results"}</button><strong>{selectedContactIds.length} recipients selected</strong></div>
+        <div className="audience-list">
+          {filteredContacts.length === 0 ? <p className="p-5 text-sm text-gray-400">No subscribed contacts match this search.</p> : filteredContacts.map((contact) => (
+            <label key={contact.id} className="audience-row">
+              <input type="checkbox" checked={selectedContactIds.includes(contact.id)} onChange={(event) => setSelectedContactIds((current) => event.target.checked ? [...new Set([...current, contact.id])] : current.filter((id) => id !== contact.id))} />
+              <span>
+                <strong>{contact.full_name || contact.company || "Unnamed contact"}</strong>
+                <small>{contact.email}{contact.full_name && contact.company ? ` · ${contact.company}` : ""}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+        {recipientError && <p role="alert" className="mt-3 text-sm text-red-300">{recipientError}</p>}
       </WorkflowSection>
 
       <WorkflowSection number="4" title="Delivery" description="Prepare this campaign for your existing cron job. Only one campaign can wait at a time.">

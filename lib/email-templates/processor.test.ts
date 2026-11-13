@@ -146,13 +146,19 @@ describe("embedded image processing", () => {
     const html = "<p>Dear Valued Partner,</p>";
     const result = await processHtmlTemplate({
       filename: "campaign.html",
-      html,
+      templateName: "Partner update",
+      html: `<h1>Campaign headline</h1>${html}`,
       uploadEmbeddedImage: vi.fn(),
     });
 
-    expect(result.sanitizedHtml).toBe(html);
-    expect(result.brevoHtml).toBe(html);
+    expect(result.sanitizedHtml).toBe(`<h1>Campaign headline</h1>${html}`);
+    expect(result.brevoHtml).toBe(`<h1>Campaign headline</h1>${html}`);
     expect(result.assets).toEqual([]);
+    expect(result.metadata).toEqual({
+      defaultCampaignName: "Partner update",
+      defaultSubject: "Campaign headline",
+      defaultPreviewText: "",
+    });
   });
 
   it.each([
