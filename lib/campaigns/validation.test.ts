@@ -8,6 +8,7 @@ const validInput = {
   content: " Hello ",
   recipientContactIds: ["one", "one", "two"],
   deliveryMode: "cron",
+  messageMode: "manual",
 };
 
 describe("campaign input validation", () => {
@@ -21,6 +22,8 @@ describe("campaign input validation", () => {
         content: "Hello",
         recipientContactIds: ["one", "two"],
         deliveryMode: "cron",
+        messageMode: "manual",
+        templateId: null,
       },
     });
   });
@@ -28,6 +31,33 @@ describe("campaign input validation", () => {
   it("requires content and recipients", () => {
     expect(parseCampaignInput({ ...validInput, content: " " })).toEqual({ ok: false, error: "Email content is required." });
     expect(parseCampaignInput({ ...validInput, recipientContactIds: [] })).toEqual({ ok: false, error: "Select at least one subscribed recipient." });
+  });
+
+  it("accepts a known HTML template without manual content", () => {
+    expect(
+      parseCampaignInput({
+        ...validInput,
+        content: "",
+        messageMode: "template",
+        templateId: "a4a7be28-b9f8-49ea-bd1f-e0f6ef80f2b5",
+      })
+    ).toMatchObject({
+      ok: true,
+      data: {
+        messageMode: "template",
+        templateId: "a4a7be28-b9f8-49ea-bd1f-e0f6ef80f2b5",
+      },
+    });
+  });
+
+  it("rejects an unknown HTML template", () => {
+    expect(
+      parseCampaignInput({
+        ...validInput,
+        messageMode: "template",
+        templateId: "unknown",
+      })
+    ).toEqual({ ok: false, error: "Select a valid email template." });
   });
 });
 
