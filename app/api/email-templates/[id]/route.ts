@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { deriveTemplateMetadata } from "@/lib/email-templates/processor";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_PATTERN =
@@ -14,14 +15,25 @@ type EmailTemplateRow = {
   source_filename: string;
   html_content: string;
   asset_urls: string[] | null;
+  default_subject: string | null;
+  default_preview_text: string | null;
   created_at: string;
   updated_at: string;
 };
 
 function serializeTemplate(template: EmailTemplateRow) {
+  const fallbackMetadata = deriveTemplateMetadata(
+    template.html_content,
+    template.name,
+  );
+
   return {
     id: template.id,
     name: template.name,
+    defaultCampaignName: template.name,
+    defaultSubject: template.default_subject ?? fallbackMetadata.defaultSubject,
+    defaultPreviewText:
+      template.default_preview_text ?? fallbackMetadata.defaultPreviewText,
     sourceFilename: template.source_filename,
     htmlContent: template.html_content,
     assetUrls: template.asset_urls ?? [],
@@ -55,7 +67,7 @@ export async function GET(_request: Request, { params }: RouteContext) {
   const { data, error } = await supabase
     .from("email_templates")
     .select(
-      "id, name, source_filename, html_content, asset_urls, created_at, updated_at",
+      "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, created_at, updated_at",
     )
     .eq("id", id)
     .eq("user_id", user.id)

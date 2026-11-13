@@ -1,11 +1,16 @@
 import sanitizeHtml from "sanitize-html";
 import {
+  deriveTemplateMetadata,
+  type EmailTemplateMetadata,
+} from "./metadata";
+import {
   RECIPIENT_NAME_TOKEN,
   compileRecipientToken,
   renderRecipientPreview,
 } from "./tokens";
 
 export { BREVO_RECIPIENT_NAME_TOKEN, RECIPIENT_NAME_TOKEN } from "./tokens";
+export { deriveTemplateMetadata } from "./metadata";
 
 export const MAX_HTML_TEMPLATE_BYTES = 5 * 1024 * 1024;
 
@@ -114,6 +119,7 @@ export type UploadEmbeddedImage = (
 
 export type ProcessHtmlTemplateInput = {
   filename: string;
+  templateName?: string;
   html: string;
   uploadEmbeddedImage: UploadEmbeddedImage;
 };
@@ -122,6 +128,7 @@ export type ProcessedHtmlTemplate = {
   sanitizedHtml: string;
   brevoHtml: string;
   assets: ProcessedEmbeddedImage[];
+  metadata: EmailTemplateMetadata;
 };
 
 export type EmailTemplateProcessingErrorCode =
@@ -304,6 +311,7 @@ export function renderTemplatePreview(
 
 export async function processHtmlTemplate({
   filename,
+  templateName,
   html,
   uploadEmbeddedImage,
 }: ProcessHtmlTemplateInput): Promise<ProcessedHtmlTemplate> {
@@ -333,6 +341,10 @@ export async function processHtmlTemplate({
     sanitizedHtml,
     brevoHtml: compileTemplateForBrevo(sanitizedHtml),
     assets: extracted.assets,
+    metadata: deriveTemplateMetadata(
+      html,
+      templateName?.trim() || filename.replace(/\.html?$/i, ""),
+    ),
   };
 }
 

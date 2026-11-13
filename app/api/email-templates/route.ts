@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
+  deriveTemplateMetadata,
   EmailTemplateProcessingError,
   processHtmlTemplate,
   validateHtmlTemplateFile,
@@ -15,14 +16,25 @@ type EmailTemplateRow = {
   source_filename: string;
   html_content: string;
   asset_urls: string[] | null;
+  default_subject: string | null;
+  default_preview_text: string | null;
   created_at: string;
   updated_at: string;
 };
 
 function serializeTemplate(template: EmailTemplateRow) {
+  const fallbackMetadata = deriveTemplateMetadata(
+    template.html_content,
+    template.name,
+  );
+
   return {
     id: template.id,
     name: template.name,
+    defaultCampaignName: template.name,
+    defaultSubject: template.default_subject ?? fallbackMetadata.defaultSubject,
+    defaultPreviewText:
+      template.default_preview_text ?? fallbackMetadata.defaultPreviewText,
     sourceFilename: template.source_filename,
     htmlContent: template.html_content,
     assetUrls: template.asset_urls ?? [],
@@ -48,7 +60,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("email_templates")
     .select(
-      "id, name, source_filename, html_content, asset_urls, created_at, updated_at",
+      "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, created_at, updated_at",
     )
     .eq("user_id", user.id)
     .is("archived_at", null)
@@ -155,6 +167,7 @@ export async function POST(request: Request) {
     const html = await uploadedFile.text();
     const processed = await processHtmlTemplate({
       filename: uploadedFile.name,
+      templateName: name,
       html,
       uploadEmbeddedImage: async (asset) => {
         const path = `${user.id}/${templateId}/${asset.index}-${asset.filename}`;
@@ -186,11 +199,13 @@ export async function POST(request: Request) {
         source_filename: uploadedFile.name,
         html_content: processed.sanitizedHtml,
         asset_urls: processed.assets.map((asset) => asset.url),
+        default_subject: processed.metadata.defaultSubject,
+        default_preview_text: processed.metadata.defaultPreviewText || null,
         created_at: now,
         updated_at: now,
       })
       .select(
-        "id, name, source_filename, html_content, asset_urls, created_at, updated_at",
+        "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, created_at, updated_at",
       )
       .single();
 

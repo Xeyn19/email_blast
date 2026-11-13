@@ -137,7 +137,7 @@
   .audience-toolbar { align-items: flex-start; flex-direction: column-reverse; }
   .campaign-form-actions { position: static; display: grid; grid-template-columns: 1fr; }
   .campaign-form-actions button { width: 100%; }
-  .campaign-primary-button { order: -3; margin-left: 0; }
+  .campaign-form-actions .campaign-primary-button { order: -3; margin-left: 0; }
   .campaign-send-note { order: -2; margin: 0; text-align: center; }
 }
 
