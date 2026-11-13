@@ -2,6 +2,11 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getDeliverabilityError } from "@/lib/campaigns/deliverability";
+import {
+  BREVO_RECIPIENT_NAME_ATTRIBUTE,
+  campaignUsesRecipientPersonalization,
+  getBrevoRecipientAttributes,
+} from "@/lib/campaigns/personalization";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   mapBrevoStatus,
@@ -15,6 +20,8 @@ type CampaignRecord = {
   subject: string;
   preview_text: string | null;
   html_content: string;
+  message_mode: "manual" | "template";
+  template_id: string | null;
   recipient_contact_ids: string[] | null;
   status: CampaignStatus;
   brevo_list_id: number | string | null;
@@ -27,7 +34,13 @@ type CampaignRecord = {
 type ContactRecord = {
   id: string;
   full_name: string | null;
+  company: string | null;
   email: string;
+};
+
+type BrevoContactAttribute = {
+  category?: string;
+  name?: string;
 };
 
 type BrevoConfiguration = {
@@ -126,6 +139,61 @@ async function getActiveBrevoSender(configuration: BrevoConfiguration) {
   return sender;
 }
 
+async function getBrevoContactAttributes(configuration: BrevoConfiguration) {
+  const response = await fetch("https://api.brevo.com/v3/contacts/attributes", {
+    method: "GET",
+    headers: brevoHeaders(configuration.apiKey),
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
+  const result = await readJsonSafely(response);
+
+  if (!response.ok || !Array.isArray(result?.attributes)) {
+    throw new CampaignServiceError(
+      "Brevo contact personalization is temporarily unavailable.",
+      502,
+      "brevo_attributes_unavailable"
+    );
+  }
+
+  return result.attributes as BrevoContactAttribute[];
+}
+
+async function ensureRecipientNameAttribute(
+  configuration: BrevoConfiguration
+) {
+  const hasRecipientName = (attributes: BrevoContactAttribute[]) =>
+    attributes.some(
+      (attribute) =>
+        attribute.name === BREVO_RECIPIENT_NAME_ATTRIBUTE &&
+        attribute.category === "normal"
+    );
+
+  if (hasRecipientName(await getBrevoContactAttributes(configuration))) return;
+
+  const response = await fetch(
+    `https://api.brevo.com/v3/contacts/attributes/normal/${BREVO_RECIPIENT_NAME_ATTRIBUTE}`,
+    {
+      method: "POST",
+      headers: brevoHeaders(configuration.apiKey, true),
+      body: JSON.stringify({ type: "text" }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
+
+  if (response.ok) return;
+
+  // A concurrent preparation may have created the attribute first.
+  if (hasRecipientName(await getBrevoContactAttributes(configuration))) return;
+
+  throw new CampaignServiceError(
+    "Brevo could not enable recipient-name personalization.",
+    502,
+    "brevo_attribute_creation_failed"
+  );
+}
+
 async function getOwnedCampaign(
   supabase: SupabaseClient,
   campaignId: string,
@@ -166,7 +234,7 @@ async function getSubscribedContacts(
 
   const { data, error } = await supabase
     .from("contacts")
-    .select("id, full_name, email")
+    .select("id, full_name, company, email")
     .eq("user_id", campaign.user_id)
     .eq("status", "subscribed")
     .in("id", recipientIds);
@@ -199,6 +267,13 @@ async function synchronizeRecipients(
   configuration: BrevoConfiguration
 ) {
   let listId = campaign.brevo_list_id;
+  const personalizeRecipients =
+    campaign.message_mode === "template" &&
+    campaignUsesRecipientPersonalization(campaign.html_content);
+
+  if (personalizeRecipients) {
+    await ensureRecipientNameAttribute(configuration);
+  }
 
   if (!listId) {
     const response = await fetch("https://api.brevo.com/v3/contacts/lists", {
@@ -252,6 +327,11 @@ async function synchronizeRecipients(
         email: contact.email,
         listIds: [Number(listId)],
         updateEnabled: true,
+        ...(personalizeRecipients
+          ? {
+              attributes: getBrevoRecipientAttributes(contact),
+            }
+          : {}),
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),

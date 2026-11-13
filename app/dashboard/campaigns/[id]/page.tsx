@@ -4,6 +4,8 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { CampaignCronControls } from "@/components/campaigns/CampaignCronControls";
 import { CampaignStatusPoller } from "@/components/campaigns/CampaignStatusPoller";
+import { campaignUsesRecipientPersonalization } from "@/lib/campaigns/personalization";
+import { renderRecipientPreview } from "@/lib/email-templates/tokens";
 import { createClient } from "@/lib/supabase/server";
 
 type PageProps = { params: Promise<{ id: string }> };
@@ -24,13 +26,26 @@ async function CampaignDetailsContent({ params }: PageProps) {
 
   const recipientIds: string[] = campaign.recipient_contact_ids ?? [];
   const { data: recipients } = recipientIds.length
-    ? await supabase.from("contacts").select("id, full_name, email, status").eq("user_id", user.id).in("id", recipientIds)
+    ? await supabase.from("contacts").select("id, full_name, company, email, status").eq("user_id", user.id).in("id", recipientIds)
     : { data: [] };
 
   const armed = Boolean(campaign.cron_armed_at);
   const prepared = Boolean(campaign.brevo_synced_at && campaign.brevo_list_id && campaign.brevo_campaign_id);
   const statusLabel = armed ? "Waiting for cron" : campaign.status === "failed" ? "Needs attention" : campaign.status === "sending" ? "Sending" : campaign.status === "sent" ? "Sent" : prepared ? "Prepared" : "Draft";
   const preparedAt = campaign.cron_armed_at || campaign.brevo_synced_at;
+  const previewRecipient = recipients?.[0];
+  const previewRecipientName =
+    previewRecipient?.full_name?.trim() ||
+    previewRecipient?.company?.trim() ||
+    previewRecipient?.email ||
+    "Valued Partner";
+  const usesRecipientPersonalization =
+    campaign.message_mode === "template" &&
+    campaignUsesRecipientPersonalization(campaign.html_content);
+  const previewHtml =
+    campaign.message_mode === "template"
+      ? renderRecipientPreview(campaign.html_content, previewRecipientName)
+      : campaign.html_content;
 
   return (
     <main className="min-h-screen bg-[#0b0b0b] p-5 text-white md:p-8 lg:p-10">
@@ -65,17 +80,22 @@ async function CampaignDetailsContent({ params }: PageProps) {
 
         <section className="campaign-detail-section">
           <div className="campaign-detail-section-heading"><span>1</span><div><h2>Email preview</h2><p>See the email content that will be sent to your audience.</p></div></div>
-          <iframe title="Campaign email preview" sandbox="" srcDoc={campaign.html_content || "<p>No email content.</p>"} className="min-h-[360px] w-full rounded-xl border border-white/10 bg-white" />
+          {usesRecipientPersonalization ? (
+            <p className="mb-3 text-sm text-gray-400">Previewing the personalized greeting as <strong className="text-white">{previewRecipientName}</strong>. Brevo will use each recipient’s own name when sending.</p>
+          ) : campaign.message_mode === "template" ? (
+            <p className="mb-3 text-sm text-gray-400">This template does not include recipient-name personalization. Its HTML will be sent unchanged.</p>
+          ) : null}
+          <iframe title="Campaign email preview" sandbox="" srcDoc={previewHtml || "<p>No email content.</p>"} className="min-h-[360px] w-full rounded-xl border border-white/10 bg-white" />
         </section>
 
         <section className="campaign-detail-section">
           <div className="campaign-detail-section-heading"><span>2</span><div><h2>Audience summary</h2><p>The subscribed recipients who will receive this campaign.</p></div></div>
-          <div className="detail-list"><strong>{recipientIds.length} recipients</strong>{(recipients ?? []).slice(0, 5).map((contact) => <div key={contact.id}><span>{contact.full_name || "Unnamed contact"}</span><small>{contact.email}</small></div>)}</div>
+          <div className="detail-list"><strong>{recipientIds.length} recipients</strong>{(recipients ?? []).slice(0, 5).map((contact) => <div key={contact.id}><span>{contact.full_name || contact.company || "Unnamed contact"}</span><small>{contact.email}</small></div>)}</div>
         </section>
 
         <section className="campaign-detail-section">
           <div className="campaign-detail-section-heading"><span>3</span><div><h2>Campaign details</h2><p>Core information about this campaign.</p></div></div>
-          <dl className="campaign-detail-grid"><div><dt>Campaign name</dt><dd>{campaign.name}</dd></div><div><dt>Email subject</dt><dd>{campaign.subject}</dd></div><div><dt>Preview text</dt><dd>{campaign.preview_text || "No preview text"}</dd></div><div><dt>Created</dt><dd>{formatManilaDate(campaign.created_at)}</dd></div></dl>
+          <dl className="campaign-detail-grid"><div><dt>Campaign name</dt><dd>{campaign.name}</dd></div><div><dt>Email subject</dt><dd>{campaign.subject}</dd></div><div><dt>Message type</dt><dd>{campaign.message_mode === "template" ? "HTML template" : "Manual text"}</dd></div><div><dt>Preview text</dt><dd>{campaign.preview_text || "No preview text"}</dd></div><div><dt>Created</dt><dd>{formatManilaDate(campaign.created_at)}</dd></div></dl>
         </section>
 
         <details className="technical-details"><summary><span>4</span><strong>Technical details</strong><small>System information for troubleshooting and support.</small></summary><dl><div><dt>Brevo list</dt><dd>{campaign.brevo_list_id || "Not prepared"}</dd></div><div><dt>Brevo campaign</dt><dd>{campaign.brevo_campaign_id || "Not prepared"}</dd></div><div><dt>Last status check</dt><dd>{formatManilaDate(campaign.status_checked_at)}</dd></div></dl></details>

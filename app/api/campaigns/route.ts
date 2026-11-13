@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
-import { textToEmailHtml } from "@/lib/campaigns/content";
 import { CampaignServiceError, prepareAndArmCampaign } from "@/lib/campaigns/service";
+import {
+  CampaignMessageError,
+  resolveCampaignMessage,
+} from "@/lib/campaigns/message";
 import { parseCampaignInput } from "@/lib/campaigns/validation";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,6 +26,18 @@ export async function POST(request: Request) {
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   const input = parsed.data;
+  let message;
+  try {
+    message = await resolveCampaignMessage(supabase, user.id, input);
+  } catch (error) {
+    if (error instanceof CampaignMessageError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    return NextResponse.json(
+      { error: "Unable to prepare the campaign message." },
+      { status: 500 }
+    );
+  }
   const { data: campaign, error } = await supabase
     .from("campaigns")
     .insert({
@@ -30,7 +45,9 @@ export async function POST(request: Request) {
       name: input.name,
       subject: input.subject,
       preview_text: input.previewText || null,
-      html_content: textToEmailHtml(input.content),
+      html_content: message.htmlContent,
+      message_mode: input.messageMode,
+      template_id: message.templateId,
       recipient_contact_ids: input.recipientContactIds,
       status: "draft",
     })
