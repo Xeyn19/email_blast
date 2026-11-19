@@ -27,10 +27,12 @@ function createSupabaseClient(
   const query = {
     select: vi.fn(),
     eq: vi.fn(),
+    is: vi.fn(),
     maybeSingle: vi.fn().mockResolvedValue(sourceResult),
   };
   query.select.mockReturnValue(query);
   query.eq.mockReturnValue(query);
+  query.is.mockReturnValue(query);
 
   return {
     auth: {

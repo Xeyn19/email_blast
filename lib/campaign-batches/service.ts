@@ -130,6 +130,7 @@ export async function createBatchFromCampaigns(
     .from("campaigns")
     .select("id, name, status, cron_armed_at")
     .eq("user_id", userId)
+    .is("archived_at", null)
     .in("id", ids);
 
   if (error) {

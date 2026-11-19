@@ -105,6 +105,7 @@ export default function DashboardClient({
       .select(
         "id, name, subject, status, created_at, recipient_contact_ids"
       )
+      .is("archived_at", null)
       .order("created_at", { ascending: false });
 
     if (error) {

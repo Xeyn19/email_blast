@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
+import { CampaignArchiveButton } from "@/components/campaigns/CampaignArchiveButton";
 import {
   getCampaignDisplayStatus,
   type CampaignDeliveryMembership,
@@ -18,6 +19,7 @@ export type CampaignDashboardRow = {
   created_at: string;
   cron_armed_at: string | null;
   source_campaign_id: string | null;
+  archived_at: string | null;
 };
 
 type ResendDraft = { id: string; armed: boolean };
@@ -26,10 +28,12 @@ export function CampaignBatchSelectionTable({
   campaigns,
   activeResendDrafts,
   batchMemberships,
+  archiveView = false,
 }: {
   campaigns: CampaignDashboardRow[];
   activeResendDrafts: Record<string, ResendDraft>;
   batchMemberships: Record<string, CampaignDeliveryMembership>;
+  archiveView?: boolean;
 }) {
   const router = useRouter();
   const [selectionMode, setSelectionMode] = useState(false);
@@ -138,7 +142,7 @@ export function CampaignBatchSelectionTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      {!archiveView ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <div>
           <strong className="block text-sm text-white">
             {selectionMode
@@ -192,7 +196,11 @@ export function CampaignBatchSelectionTable({
             </button>
           )}
         </div>
-      </div>
+      </div> : (
+        <div className="rounded-xl border border-orange-400/25 bg-orange-500/[0.06] p-4 text-sm text-orange-100">
+          Archived campaigns can be restored for 30 days. After that, the daily cron permanently removes them from EmailBlast.
+        </div>
+      )}
 
       {error ? (
         <p
@@ -207,14 +215,14 @@ export function CampaignBatchSelectionTable({
         <table className="w-full min-w-[900px] text-left">
           <thead className="bg-white/[0.05] text-sm text-gray-400">
             <tr>
-              {selectionMode ? (
+              {selectionMode && !archiveView ? (
                 <th className="w-14 p-4">
                   <span className="sr-only">Select</span>
                 </th>
               ) : null}
               <th className="p-4">Campaign</th>
               <th className="p-4">Subject</th>
-              <th className="p-4">Delivery</th>
+              <th className="p-4">{archiveView ? "Retention" : "Delivery"}</th>
               <th className="p-4">Created</th>
               <th className="p-4">Action</th>
             </tr>
@@ -231,6 +239,7 @@ export function CampaignBatchSelectionTable({
                 {
                   status: campaign.status,
                   cronArmedAt: campaign.cron_armed_at,
+                  archivedAt: campaign.archived_at,
                 },
                 membership,
               );
@@ -249,7 +258,7 @@ export function CampaignBatchSelectionTable({
                   key={campaign.id}
                   className="border-t border-white/10 transition hover:bg-white/[0.03]"
                 >
-                  {selectionMode ? (
+                  {selectionMode && !archiveView ? (
                     <td className="p-4 align-top">
                       {eligible ? (
                         <input
@@ -281,7 +290,11 @@ export function CampaignBatchSelectionTable({
                     </span>
                   </td>
                   <td className="p-4 align-top text-sm text-gray-400">
-                    {membership ? (
+                    {campaign.archived_at ? (
+                      <span className="text-orange-200">
+                        Permanently removed {formatDeletionDate(campaign.archived_at)}
+                      </span>
+                    ) : membership ? (
                       <Link
                         href={batchHref!}
                         className="font-medium text-orange-300 hover:text-orange-200"
@@ -297,12 +310,14 @@ export function CampaignBatchSelectionTable({
                   </td>
                   <td className="p-4 align-top">
                     <div className="flex min-w-max items-start gap-2">
-                      <Link
+                      {campaign.archived_at ? (
+                        <CampaignArchiveButton campaignId={campaign.id} mode="restore" />
+                      ) : <Link
                         href={primaryAction.href}
                         className="inline-flex min-h-11 items-center whitespace-nowrap rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
                       >
                         {primaryAction.label}
-                      </Link>
+                      </Link>}
                       <details className="group">
                         <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded-lg border border-white/25 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-400">
                           More
@@ -311,7 +326,14 @@ export function CampaignBatchSelectionTable({
                           </span>
                         </summary>
                         <div className="mt-2 flex max-w-56 flex-col gap-2 rounded-lg border border-white/15 bg-[#171717] p-2 shadow-xl">
-                          {primaryAction.href !== campaignHref ? (
+                          {campaign.archived_at ? (
+                            <Link
+                              href={campaignHref}
+                              className="rounded-md px-3 py-2 text-sm text-gray-200 hover:bg-white/[0.06]"
+                            >
+                              View archived campaign
+                            </Link>
+                          ) : primaryAction.href !== campaignHref ? (
                             <Link
                               href={campaignHref}
                               className="rounded-md px-3 py-2 text-sm text-gray-200 hover:bg-white/[0.06]"
@@ -327,8 +349,9 @@ export function CampaignBatchSelectionTable({
                               View delivery batch
                             </Link>
                           ) : null}
-                          {campaign.status === "sent" ||
-                          campaign.status === "failed" ? (
+                          {!campaign.archived_at &&
+                          (campaign.status === "sent" ||
+                          campaign.status === "failed") ? (
                             resendDraft ? (
                               <Link
                                 href={`/dashboard/campaigns/${resendDraft.id}${resendDraft.armed ? "" : "/edit"}`}
@@ -344,6 +367,13 @@ export function CampaignBatchSelectionTable({
                                 compact
                               />
                             )
+                          ) : null}
+                          {!campaign.archived_at &&
+                          !["prepared", "waiting", "sending"].includes(displayStatus) ? (
+                            <CampaignArchiveButton
+                              campaignId={campaign.id}
+                              mode="archive"
+                            />
                           ) : null}
                         </div>
                       </details>
@@ -392,6 +422,7 @@ function getPrimaryAction(
 
 function StatusBadge({ status }: { status: CampaignDisplayStatus }) {
   const labels: Record<CampaignDisplayStatus, string> = {
+    archived: "Archived",
     draft: "Draft",
     prepared: "Prepared",
     waiting: "Waiting for cron",
@@ -400,6 +431,7 @@ function StatusBadge({ status }: { status: CampaignDisplayStatus }) {
     failed: "Needs attention",
   };
   const tones: Record<CampaignDisplayStatus, string> = {
+    archived: "border-orange-400/35 bg-orange-500/10 text-orange-200",
     draft: "border-white/20 bg-white/[0.04] text-gray-300",
     prepared: "border-amber-400/30 bg-amber-500/10 text-amber-200",
     waiting: "border-orange-400/35 bg-orange-500/10 text-orange-200",
@@ -421,4 +453,14 @@ function formatManilaDate(value: string) {
     dateStyle: "medium",
     timeZone: "Asia/Manila",
   }).format(new Date(value));
+}
+
+function formatDeletionDate(archivedAt: string) {
+  const deletesAt = new Date(
+    new Date(archivedAt).getTime() + 30 * 24 * 60 * 60 * 1000,
+  );
+  return new Intl.DateTimeFormat("en-PH", {
+    dateStyle: "medium",
+    timeZone: "Asia/Manila",
+  }).format(deletesAt);
 }

@@ -1,4 +1,5 @@
 export type CampaignDisplayStatus =
+  | "archived"
   | "draft"
   | "prepared"
   | "waiting"
@@ -17,9 +18,11 @@ export function getCampaignDisplayStatus(
   campaign: {
     status: string;
     cronArmedAt: string | null;
+    archivedAt?: string | null;
   },
   membership?: CampaignDeliveryMembership,
 ): CampaignDisplayStatus {
+  if (campaign.archivedAt) return "archived";
   if (campaign.status === "sent") return "sent";
   if (campaign.status === "failed") return "failed";
   if (campaign.status === "sending") return "sending";

@@ -32,6 +32,7 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     .eq("id", id)
     .eq("user_id", user.id)
     .eq("status", "draft")
+    .is("archived_at", null)
     .is("cron_armed_at", null)
     .maybeSingle();
 
@@ -87,6 +88,7 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     .eq("id", id)
     .eq("user_id", user.id)
     .eq("status", "draft")
+    .is("archived_at", null)
     .is("cron_armed_at", null)
     .select("id")
     .maybeSingle();

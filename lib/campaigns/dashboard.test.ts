@@ -41,4 +41,14 @@ describe("campaign dashboard status", () => {
       )
     ).toBe("failed");
   });
+
+  it("shows archived campaigns independently of their previous status", () => {
+    expect(
+      getCampaignDisplayStatus({
+        status: "sent",
+        cronArmedAt: null,
+        archivedAt: "2026-11-19T08:00:00.000Z",
+      })
+    ).toBe("archived");
+  });
 });

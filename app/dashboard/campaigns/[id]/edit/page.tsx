@@ -38,14 +38,14 @@ async function EditCampaignContent({ params }: PageProps) {
 
   const { data: campaign, error } = await supabase
     .from("campaigns")
-    .select("id, status, cron_armed_at")
+    .select("id, status, cron_armed_at, archived_at")
     .eq("id", id)
     .eq("user_id", user.id)
     .single();
 
   if (error || !campaign) notFound();
 
-  if (campaign.status !== "draft" || campaign.cron_armed_at) {
+  if (campaign.status !== "draft" || campaign.cron_armed_at || campaign.archived_at) {
     redirect(`/dashboard/campaigns/${id}`);
   }
 

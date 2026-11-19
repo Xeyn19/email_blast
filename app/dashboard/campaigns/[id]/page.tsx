@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { CampaignCronControls } from "@/components/campaigns/CampaignCronControls";
 import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
 import { CampaignStatusPoller } from "@/components/campaigns/CampaignStatusPoller";
+import { CampaignArchiveButton } from "@/components/campaigns/CampaignArchiveButton";
 import { campaignUsesRecipientPersonalization } from "@/lib/campaigns/personalization";
 import { renderRecipientPreview } from "@/lib/email-templates/tokens";
 import { createClient } from "@/lib/supabase/server";
@@ -33,8 +34,8 @@ async function CampaignDetailsContent({ params }: PageProps) {
     campaign.source_campaign_id
       ? supabase.from("campaigns").select("id, name").eq("id", campaign.source_campaign_id).eq("user_id", user.id).maybeSingle()
       : Promise.resolve({ data: null }),
-    campaign.status === "sent" || campaign.status === "failed"
-      ? supabase.from("campaigns").select("id, name, cron_armed_at").eq("source_campaign_id", campaign.id).eq("user_id", user.id).eq("status", "draft").maybeSingle()
+    !campaign.archived_at && (campaign.status === "sent" || campaign.status === "failed")
+      ? supabase.from("campaigns").select("id, name, cron_armed_at").eq("source_campaign_id", campaign.id).eq("user_id", user.id).eq("status", "draft").is("archived_at", null).maybeSingle()
       : Promise.resolve({ data: null }),
     supabase
       .from("campaign_batch_items")
@@ -51,9 +52,10 @@ async function CampaignDetailsContent({ params }: PageProps) {
   } | null;
   const deliveryBatch = batchMembership?.campaign_batches ?? null;
 
+  const archived = Boolean(campaign.archived_at);
   const armed = Boolean(campaign.cron_armed_at);
   const prepared = Boolean(campaign.brevo_synced_at && campaign.brevo_list_id && campaign.brevo_campaign_id);
-  const statusLabel = armed ? "Waiting for cron" : campaign.status === "failed" ? "Needs attention" : campaign.status === "sending" ? "Sending" : campaign.status === "sent" ? "Sent" : prepared ? "Prepared" : "Draft";
+  const statusLabel = archived ? "Archived" : armed ? "Waiting for cron" : campaign.status === "failed" ? "Needs attention" : campaign.status === "sending" ? "Sending" : campaign.status === "sent" ? "Sent" : prepared ? "Prepared" : "Draft";
   const preparedAt = campaign.cron_armed_at || campaign.brevo_synced_at;
   const previewRecipient = recipients?.[0];
   const previewRecipientName =
@@ -89,10 +91,10 @@ async function CampaignDetailsContent({ params }: PageProps) {
               </p>
             ) : null}
           </div>
-          <span className={`campaign-detail-status status-${campaign.status}`}>{statusLabel}</span>
+          <span className={`campaign-detail-status status-${archived ? "archived" : campaign.status}`}>{statusLabel}</span>
           <div className="ml-auto flex flex-wrap items-start gap-3 max-sm:ml-0 max-sm:w-full">
-            {campaign.status === "draft" && !armed ? <Link href={`/dashboard/campaigns/${campaign.id}/edit`} className="campaign-secondary-button max-sm:w-full max-sm:text-center">Edit campaign</Link> : null}
-            {campaign.status === "sent" ? (
+            {!archived && campaign.status === "draft" && !armed ? <Link href={`/dashboard/campaigns/${campaign.id}/edit`} className="campaign-secondary-button max-sm:w-full max-sm:text-center">Edit campaign</Link> : null}
+            {!archived && campaign.status === "sent" ? (
               activeResendDraft ? (
                 <Link href={`/dashboard/campaigns/${activeResendDraft.id}${activeResendDraft.cron_armed_at ? "" : "/edit"}`} className="campaign-primary-button !ml-0 max-sm:w-full max-sm:text-center">{activeResendDraft.cron_armed_at ? "View resend waiting for cron" : "Continue resend draft"}</Link>
               ) : (
@@ -102,7 +104,17 @@ async function CampaignDetailsContent({ params }: PageProps) {
           </div>
         </header>
 
-        {armed ? (
+        {archived ? (
+          <section className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-orange-400/30 bg-orange-500/[0.08] p-5">
+            <div>
+              <h2 className="font-semibold text-orange-100">Campaign archived</h2>
+              <p className="mt-1 text-sm text-orange-100/80">Restore this campaign before {formatArchiveDeletionDate(campaign.archived_at)}. After that date, the daily cron permanently removes it from EmailBlast.</p>
+            </div>
+            <CampaignArchiveButton campaignId={campaign.id} mode="restore" />
+          </section>
+        ) : null}
+
+        {!archived && armed ? (
           <section className="armed-campaign-panel">
             <div className="armed-campaign-main">
               <div className="armed-icon" aria-hidden="true">◷</div>
@@ -111,7 +123,7 @@ async function CampaignDetailsContent({ params }: PageProps) {
             </div>
             <div className="armed-notice">ⓘ The email has not been sent yet.</div>
           </section>
-        ) : campaign.status === "draft" ? (
+        ) : !archived && campaign.status === "draft" ? (
           <section className="armed-campaign-panel">
             <div className="armed-campaign-main">
               <div className="armed-icon" aria-hidden="true">✓</div>
@@ -128,10 +140,10 @@ async function CampaignDetailsContent({ params }: PageProps) {
           </section>
         ) : null}
 
-        {campaign.status === "failed" && <section className="campaign-failure-panel"><div><h2>Delivery needs attention</h2><p>{campaign.last_error || "Brevo could not complete this delivery. Create an editable resend draft to review the campaign before another attempt."}</p></div>{activeResendDraft ? <Link href={`/dashboard/campaigns/${activeResendDraft.id}${activeResendDraft.cron_armed_at ? "" : "/edit"}`} className="campaign-primary-button !ml-0">{activeResendDraft.cron_armed_at ? "View resend waiting for cron" : "Continue resend draft"}</Link> : <EditAndResendButton campaignId={campaign.id} />}</section>}
+        {!archived && campaign.status === "failed" && <section className="campaign-failure-panel"><div><h2>Delivery needs attention</h2><p>{campaign.last_error || "Brevo could not complete this delivery. Create an editable resend draft to review the campaign before another attempt."}</p></div>{activeResendDraft ? <Link href={`/dashboard/campaigns/${activeResendDraft.id}${activeResendDraft.cron_armed_at ? "" : "/edit"}`} className="campaign-primary-button !ml-0">{activeResendDraft.cron_armed_at ? "View resend waiting for cron" : "Continue resend draft"}</Link> : <EditAndResendButton campaignId={campaign.id} />}</section>}
 
-        <CampaignLifecycle status={campaign.status} armed={armed} prepared={prepared} />
-        <CampaignStatusPoller campaignId={campaign.id} active={campaign.status === "sending"} />
+        {!archived ? <CampaignLifecycle status={campaign.status} armed={armed} prepared={prepared} /> : null}
+        {!archived ? <CampaignStatusPoller campaignId={campaign.id} active={campaign.status === "sending"} /> : null}
 
         <section className="campaign-detail-section">
           <div className="campaign-detail-section-heading"><span>1</span><div><h2>Email preview</h2><p>See the email content that will be sent to your audience.</p></div></div>
@@ -163,6 +175,13 @@ function CampaignLifecycle({ status, armed, prepared }: { status: string; armed:
   const current = status === "sent" ? 4 : status === "sending" ? 3 : armed ? 2 : prepared ? 1 : 0;
   const steps = ["Draft", "Prepared", "Waiting for cron", "Sending", "Sent"];
   return <ol className="campaign-lifecycle" aria-label="Campaign delivery progress">{steps.map((step, index) => <li key={step} className={index < current ? "complete" : index === current ? "current" : ""}><span>{index < current ? "✓" : index + 1}</span><strong>{step}</strong></li>)}</ol>;
+}
+
+function formatArchiveDeletionDate(archivedAt: string) {
+  return new Intl.DateTimeFormat("en-PH", {
+    dateStyle: "medium",
+    timeZone: "Asia/Manila",
+  }).format(new Date(new Date(archivedAt).getTime() + 30 * 24 * 60 * 60 * 1000));
 }
 
 function formatManilaDate(value: string | null | undefined) {
