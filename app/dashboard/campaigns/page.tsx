@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
+import { CampaignBatchSelectionTable } from "@/components/campaigns/CampaignBatchSelectionTable";
 import { createClient } from "@/lib/supabase/server";
 
 export default function CampaignsPage() {
@@ -33,26 +33,31 @@ async function CampaignsContent() {
     redirect("/");
   }
 
-  const { data: campaigns, error } = await supabase
-    .from("campaigns")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const [campaignsResult, batchItemsResult] = await Promise.all([
+    supabase
+      .from("campaigns")
+      .select("*")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("campaign_batch_items")
+      .select("campaign_id, batch_id"),
+  ]);
+  const { data: campaigns, error } = campaignsResult;
+  const batchMemberships = Object.fromEntries(
+    (batchItemsResult.data ?? []).map((item) => [item.campaign_id, item.batch_id]),
+  );
 
-  const activeResendDraftBySource = new Map<
-    string,
-    { id: string; name: string; armed: boolean }
-  >();
+  const activeResendDraftBySource: Record<string, { id: string; armed: boolean }> = {};
   for (const campaign of campaigns ?? []) {
     if (
       campaign.status === "draft" &&
       campaign.source_campaign_id &&
-      !activeResendDraftBySource.has(campaign.source_campaign_id)
+      !activeResendDraftBySource[campaign.source_campaign_id]
     ) {
-      activeResendDraftBySource.set(campaign.source_campaign_id, {
+      activeResendDraftBySource[campaign.source_campaign_id] = {
         id: campaign.id,
-        name: campaign.name,
         armed: Boolean(campaign.cron_armed_at),
-      });
+      };
     }
   }
 
@@ -92,73 +97,21 @@ async function CampaignsContent() {
           </div>
         )}
 
-        {!error && campaigns && campaigns.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-white/10">
-            <table className="w-full text-left">
-              <thead className="bg-white/[0.05] text-sm text-gray-400">
-                <tr>
-                  <th className="p-4">Campaign Name</th>
-                  <th className="p-4">Subject</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Created</th>
-                  <th className="p-4">Action</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {campaigns.map((campaign) => (
-                  <tr
-                    key={campaign.id}
-                    className="border-t border-white/10 transition hover:bg-white/[0.03]"
-                  >
-                    <td className="p-4 font-medium">
-                      {campaign.name}
-                    </td>
-
-                    <td className="p-4 text-gray-400">
-                      {campaign.subject || "No subject"}
-                    </td>
-
-                    <td className="p-4 capitalize">
-                      {campaign.status}
-                    </td>
-
-                    <td className="p-4 text-gray-400">
-                      {new Date(
-                        campaign.created_at
-                      ).toLocaleDateString()}
-                    </td>
-
-                    <td className="p-4">
-                      <div className="flex min-w-max flex-wrap items-start gap-2">
-                        <Link
-                          href={`/dashboard/campaigns/${campaign.id}`}
-                          className="inline-block whitespace-nowrap rounded-lg border border-white/30 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/[0.06]"
-                        >
-                          Open Campaign
-                        </Link>
-                        {(campaign.status === "sent" || campaign.status === "failed") ? (
-                          activeResendDraftBySource.has(campaign.id) ? (
-                            <Link
-                              href={`/dashboard/campaigns/${activeResendDraftBySource.get(campaign.id)?.id}${activeResendDraftBySource.get(campaign.id)?.armed ? "" : "/edit"}`}
-                              className="inline-block whitespace-nowrap rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
-                            >
-                              {activeResendDraftBySource.get(campaign.id)?.armed
-                                ? "View resend waiting for cron"
-                                : "Continue resend draft"}
-                            </Link>
-                          ) : (
-                            <EditAndResendButton campaignId={campaign.id} compact />
-                          )
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {!error && campaigns && campaigns.length > 0 ? (
+          <CampaignBatchSelectionTable
+            campaigns={campaigns.map((campaign) => ({
+              id: campaign.id,
+              name: campaign.name,
+              subject: campaign.subject,
+              status: campaign.status,
+              created_at: campaign.created_at,
+              cron_armed_at: campaign.cron_armed_at,
+              source_campaign_id: campaign.source_campaign_id,
+            }))}
+            activeResendDrafts={activeResendDraftBySource}
+            batchMemberships={batchMemberships}
+          />
+        ) : null}
 
         <div className="mt-8">
           <Link

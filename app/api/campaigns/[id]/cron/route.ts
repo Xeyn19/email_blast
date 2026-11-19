@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { CampaignServiceError, prepareAndArmCampaign } from "@/lib/campaigns/service";
+import {
+  CampaignBatchError,
+  prepareAndArmSingleCampaign,
+  removeCampaignFromBatch,
+} from "@/lib/campaign-batches/service";
 import { createClient } from "@/lib/supabase/server";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -16,14 +20,14 @@ export async function POST(_request: Request, { params }: RouteContext) {
   if (error || !user) return NextResponse.json({ error: "Your session has expired. Please log in again." }, { status: 401 });
 
   try {
-    const result = await prepareAndArmCampaign(supabase, id, user.id);
+    const result = await prepareAndArmSingleCampaign(supabase, id, user.id);
     return NextResponse.json({ success: true, ...result, status: "waiting_for_cron" });
   } catch (serviceError) {
-    if (serviceError instanceof CampaignServiceError) {
+    if (serviceError instanceof CampaignBatchError) {
       return NextResponse.json({
         error: serviceError.message,
         code: serviceError.code,
-        conflictingCampaignId: serviceError.code === "cron_slot_occupied" ? serviceError.campaignId : undefined,
+        batchId: serviceError.batchId,
       }, { status: serviceError.status });
     }
     return NextResponse.json({ error: "Unable to prepare this campaign for cron." }, { status: 500 });
@@ -35,18 +39,26 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
   const { supabase, user, error } = await getAuthenticatedContext();
   if (error || !user) return NextResponse.json({ error: "Your session has expired. Please log in again." }, { status: 401 });
 
-  const { data, error: updateError } = await supabase
-    .from("campaigns")
-    .update({ cron_armed_at: null })
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .eq("status", "draft")
-    .not("cron_armed_at", "is", null)
-    .select("id")
+  const { data: item, error: itemError } = await supabase
+    .from("campaign_batch_items")
+    .select("batch_id, campaign_batches!inner(user_id, status)")
+    .eq("campaign_id", id)
+    .eq("campaign_batches.user_id", user.id)
     .maybeSingle();
-
-  if (updateError) return NextResponse.json({ error: "Unable to remove this campaign from cron." }, { status: 500 });
-  if (!data) return NextResponse.json({ error: "This campaign is not waiting for cron." }, { status: 409 });
-  return NextResponse.json({ success: true, campaignId: id });
+  if (itemError) return NextResponse.json({ error: "Unable to find this campaign's delivery batch." }, { status: 500 });
+  if (!item) return NextResponse.json({ error: "This campaign is not waiting for cron." }, { status: 409 });
+  try {
+    const result = await removeCampaignFromBatch(
+      item.batch_id as string,
+      id,
+      user.id,
+    );
+    return NextResponse.json({ success: true, campaignId: id, ...result });
+  } catch (serviceError) {
+    if (serviceError instanceof CampaignBatchError) {
+      return NextResponse.json({ error: serviceError.message, code: serviceError.code }, { status: serviceError.status });
+    }
+    return NextResponse.json({ error: "Unable to remove this campaign from cron." }, { status: 500 });
+  }
 }
 

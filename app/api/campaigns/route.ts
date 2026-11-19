@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { CampaignServiceError, prepareAndArmCampaign } from "@/lib/campaigns/service";
+import {
+  CampaignBatchError,
+  prepareAndArmSingleCampaign,
+} from "@/lib/campaign-batches/service";
 import {
   CampaignMessageError,
   resolveCampaignMessage,
@@ -63,16 +66,16 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await prepareAndArmCampaign(supabase, campaign.id, user.id);
+    const result = await prepareAndArmSingleCampaign(supabase, campaign.id, user.id);
     return NextResponse.json({ success: true, ...result, status: "waiting_for_cron" }, { status: 201 });
   } catch (serviceError) {
-    if (serviceError instanceof CampaignServiceError) {
+    if (serviceError instanceof CampaignBatchError) {
       return NextResponse.json({
         error: serviceError.message,
         code: serviceError.code,
         campaignId: campaign.id,
         savedAsDraft: true,
-        conflictingCampaignId: serviceError.code === "cron_slot_occupied" ? serviceError.campaignId : undefined,
+        batchId: serviceError.batchId,
       }, { status: serviceError.status });
     }
 

@@ -93,5 +93,33 @@ export async function PATCH(request: Request, { params }: RouteContext) {
 
   if (error) return NextResponse.json({ error: "Unable to save campaign changes." }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Remove this campaign from cron before editing, then try again." }, { status: 409 });
+
+  const { data: batchItem } = await supabase
+    .from("campaign_batch_items")
+    .select("id, batch_id")
+    .eq("campaign_id", id)
+    .maybeSingle();
+  if (batchItem) {
+    await Promise.all([
+      supabase
+        .from("campaign_batch_items")
+        .update({
+          preparation_status: "pending",
+          prepared_at: null,
+          last_error: null,
+        })
+        .eq("id", batchItem.id),
+      supabase
+        .from("campaign_batches")
+        .update({
+          status: "draft",
+          prepared_at: null,
+          last_error: null,
+        })
+        .eq("id", batchItem.batch_id)
+        .eq("user_id", user.id)
+        .in("status", ["draft", "prepared"]),
+    ]);
+  }
   return NextResponse.json({ success: true, campaignId: id });
 }

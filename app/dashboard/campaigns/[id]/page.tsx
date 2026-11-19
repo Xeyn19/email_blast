@@ -26,7 +26,7 @@ async function CampaignDetailsContent({ params }: PageProps) {
   if (error || !campaign) notFound();
 
   const recipientIds: string[] = campaign.recipient_contact_ids ?? [];
-  const [recipientsResult, sourceCampaignResult, activeResendResult] = await Promise.all([
+  const [recipientsResult, sourceCampaignResult, activeResendResult, batchMembershipResult] = await Promise.all([
     recipientIds.length
       ? supabase.from("contacts").select("id, full_name, company, email, status").eq("user_id", user.id).in("id", recipientIds)
       : Promise.resolve({ data: [] }),
@@ -36,10 +36,20 @@ async function CampaignDetailsContent({ params }: PageProps) {
     campaign.status === "sent" || campaign.status === "failed"
       ? supabase.from("campaigns").select("id, name, cron_armed_at").eq("source_campaign_id", campaign.id).eq("user_id", user.id).eq("status", "draft").maybeSingle()
       : Promise.resolve({ data: null }),
+    supabase
+      .from("campaign_batch_items")
+      .select("batch_id, campaign_batches!inner(id, name, status, armed_at)")
+      .eq("campaign_id", campaign.id)
+      .maybeSingle(),
   ]);
   const recipients = recipientsResult.data;
   const sourceCampaign = sourceCampaignResult.data;
   const activeResendDraft = activeResendResult.data;
+  const batchMembership = batchMembershipResult.data as unknown as {
+    batch_id: string;
+    campaign_batches: { id: string; name: string; status: string; armed_at: string | null };
+  } | null;
+  const deliveryBatch = batchMembership?.campaign_batches ?? null;
 
   const armed = Boolean(campaign.cron_armed_at);
   const prepared = Boolean(campaign.brevo_synced_at && campaign.brevo_list_id && campaign.brevo_campaign_id);
@@ -73,6 +83,11 @@ async function CampaignDetailsContent({ params }: PageProps) {
                 Created from <Link href={`/dashboard/campaigns/${sourceCampaign.id}`} className="font-semibold underline underline-offset-2">{sourceCampaign.name}</Link>.
               </p>
             ) : null}
+            {deliveryBatch ? (
+              <p className="!mt-2 text-sm text-gray-300">
+                Delivery batch: <Link href={`/dashboard/campaign-batches/${deliveryBatch.id}`} className="font-semibold text-orange-200 underline underline-offset-2">{deliveryBatch.name}</Link>
+              </p>
+            ) : null}
           </div>
           <span className={`campaign-detail-status status-${campaign.status}`}>{statusLabel}</span>
           <div className="ml-auto flex flex-wrap items-start gap-3 max-sm:ml-0 max-sm:w-full">
@@ -91,14 +106,14 @@ async function CampaignDetailsContent({ params }: PageProps) {
           <section className="armed-campaign-panel">
             <div className="armed-campaign-main">
               <div className="armed-icon" aria-hidden="true">◷</div>
-              <div><h2>Ready for the next cron run</h2><p>This campaign is prepared and armed. Your existing cron-job.org schedule will trigger delivery.</p><div className="armed-meta"><span>{recipientIds.length} recipients</span><span>Prepared {formatManilaDate(preparedAt)}</span></div></div>
-              <CampaignCronControls campaignId={campaign.id} armed canPrepare={false} />
+              <div><h2>Ready in a delivery batch</h2><p>This campaign is prepared and waiting with its batch. Your existing cron-job.org schedule will trigger delivery.</p><div className="armed-meta"><span>{recipientIds.length} recipients</span><span>Prepared {formatManilaDate(preparedAt)}</span></div></div>
+              <CampaignCronControls campaignId={campaign.id} armed canPrepare={false} inBatch={Boolean(deliveryBatch)} />
             </div>
             <div className="armed-notice">ⓘ The email has not been sent yet.</div>
           </section>
         ) : campaign.status === "draft" ? (
           <section className="armed-campaign-panel">
-            <div className="armed-campaign-main"><div className="armed-icon" aria-hidden="true">✓</div><div><h2>{prepared ? "Campaign prepared" : "Draft campaign"}</h2><p>{prepared ? "The Brevo draft is ready. Arm it for your next cron run when you are ready." : "Review the campaign, then prepare it for your fixed cron job."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></div>
+            <div className="armed-campaign-main"><div className="armed-icon" aria-hidden="true">✓</div><div><h2>{prepared ? "Campaign prepared" : "Draft campaign"}</h2><p>{prepared ? "The Brevo draft is ready. Add it to a delivery batch for the next cron run." : "Review the campaign, then prepare it as a one-email delivery batch or combine it with other drafts."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></div>
           </section>
         ) : null}
 
