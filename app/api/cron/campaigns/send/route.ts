@@ -23,6 +23,12 @@ export async function POST(request: Request) {
 
   try {
     const admin = createAdminClient();
+    const { data: purgeData, error: purgeError } = await admin.rpc(
+      "purge_expired_campaign_archive",
+    );
+    const purgedCampaigns = purgeError
+      ? 0
+      : Number(purgeData?.[0]?.purged_count ?? 0);
     const { data, error } = await admin.rpc("claim_armed_campaign_batch");
     if (error) return NextResponse.json({ ok: false, error: "Unable to claim the delivery batch." }, { status: 500, headers: noStoreHeaders });
 
@@ -30,7 +36,16 @@ export async function POST(request: Request) {
     const batchId = claimed?.batch_id;
     const campaignIds = claimed?.campaign_ids ?? [];
     if (!batchId || campaignIds.length === 0) {
-      return NextResponse.json({ ok: true, sent: false, reason: "no_batch_armed" }, { status: 200, headers: noStoreHeaders });
+      return NextResponse.json(
+        {
+          ok: true,
+          sent: false,
+          reason: "no_batch_armed",
+          purgedCampaigns,
+          archiveCleanupOk: !purgeError,
+        },
+        { status: 200, headers: noStoreHeaders },
+      );
     }
 
     const settled = await runBatchWithConcurrency(
@@ -61,6 +76,8 @@ export async function POST(request: Request) {
       accepted,
       rejected,
       uncertain,
+      purgedCampaigns,
+      archiveCleanupOk: !purgeError,
     }, { status: uncertain ? 202 : 200, headers: noStoreHeaders });
   } catch {
     return NextResponse.json({ ok: false, error: "Cron delivery failed unexpectedly." }, { status: 500, headers: noStoreHeaders });

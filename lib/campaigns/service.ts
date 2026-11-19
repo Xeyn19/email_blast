@@ -28,6 +28,7 @@ type CampaignRecord = {
   brevo_campaign_id: number | string | null;
   brevo_synced_at: string | null;
   cron_armed_at: string | null;
+  archived_at: string | null;
   sent_at?: string | null;
 };
 
@@ -204,6 +205,7 @@ async function getOwnedCampaign(
     .select("*")
     .eq("id", campaignId)
     .eq("user_id", userId)
+    .is("archived_at", null)
     .single();
 
   if (error || !data) {
@@ -657,7 +659,11 @@ export async function reconcileCampaignStatus(
   userId?: string,
   timeoutMs = 15_000,
 ) {
-  let query = supabase.from("campaigns").select("*").eq("id", campaignId);
+  let query = supabase
+    .from("campaigns")
+    .select("*")
+    .eq("id", campaignId)
+    .is("archived_at", null);
   if (userId) query = query.eq("user_id", userId);
 
   const { data, error } = await query.single();

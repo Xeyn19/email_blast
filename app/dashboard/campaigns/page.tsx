@@ -18,6 +18,7 @@ const CAMPAIGN_VIEWS = [
   "sending",
   "sent",
   "failed",
+  "archived",
   "all",
 ] as const;
 type CampaignView = (typeof CAMPAIGN_VIEWS)[number];
@@ -87,11 +88,16 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
   let campaignsQuery = supabase
     .from("campaigns")
     .select(
-      "id, name, subject, status, created_at, cron_armed_at, source_campaign_id",
+      "id, name, subject, status, created_at, cron_armed_at, source_campaign_id, archived_at",
       { count: "exact" },
     )
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
+
+  campaignsQuery =
+    view === "archived"
+      ? campaignsQuery.not("archived_at", "is", null)
+      : campaignsQuery.is("archived_at", null);
 
   if (search) {
     const pattern = quotePostgrestValue(`%${search}%`);
@@ -145,6 +151,7 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
     waitingCountResult,
     sendingCountResult,
     failedCountResult,
+    archiveCountResult,
     activeBatchResult,
   ] = await Promise.all([
     campaignsQuery.range(from, to),
@@ -152,6 +159,7 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
       .from("campaigns")
       .select("id, source_campaign_id, cron_armed_at")
       .eq("user_id", user.id)
+      .is("archived_at", null)
       .eq("status", "draft")
       .not("source_campaign_id", "is", null)
       .order("created_at", { ascending: false }),
@@ -159,23 +167,32 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
       .from("campaigns")
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
+      .is("archived_at", null)
       .in("status", ["draft", "sending", "failed"]),
     supabase
       .from("campaigns")
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
+      .is("archived_at", null)
       .eq("status", "draft")
       .not("cron_armed_at", "is", null),
     supabase
       .from("campaigns")
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
+      .is("archived_at", null)
       .eq("status", "sending"),
     supabase
       .from("campaigns")
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
+      .is("archived_at", null)
       .eq("status", "failed"),
+    supabase
+      .from("campaigns")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .not("archived_at", "is", null),
     supabase
       .from("campaign_batches")
       .select(
@@ -308,6 +325,9 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
                 }`}
               >
                 {viewLabel(tab)}
+                {tab === "archived" && (archiveCountResult.count ?? 0) > 0
+                  ? ` (${archiveCountResult.count})`
+                  : ""}
               </Link>
             ))}
           </div>
@@ -359,6 +379,7 @@ async function CampaignsContent({ searchParams }: { searchParams: SearchParams }
             campaigns={campaigns}
             activeResendDrafts={activeResendDrafts}
             batchMemberships={batchMemberships}
+            archiveView={view === "archived"}
           />
         ) : null}
 
@@ -543,6 +564,7 @@ function viewLabel(view: CampaignView) {
     sending: "Sending",
     sent: "Sent",
     failed: "Needs attention",
+    archived: "Archive",
     all: "All",
   };
   return labels[view];
