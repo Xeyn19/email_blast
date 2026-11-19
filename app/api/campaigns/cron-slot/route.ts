@@ -9,17 +9,23 @@ export async function GET() {
 
   try {
     const admin = createAdminClient();
-    const { data: campaign, error: slotError } = await admin
-      .from("campaigns")
-      .select("id, user_id, name, cron_armed_at")
-      .not("cron_armed_at", "is", null)
-      .eq("status", "draft")
+    const { data: batch, error: slotError } = await admin
+      .from("campaign_batches")
+      .select("id, user_id, name, armed_at, campaign_batch_items(count)")
+      .eq("status", "waiting")
+      .not("armed_at", "is", null)
       .maybeSingle();
     if (slotError) throw slotError;
 
     return NextResponse.json({
-      available: !campaign,
-      campaign: campaign?.user_id === user.id ? { id: campaign.id, name: campaign.name, armedAt: campaign.cron_armed_at } : null,
+      available: !batch,
+      batch: batch?.user_id === user.id ? {
+        id: batch.id,
+        name: batch.name,
+        itemCount: Number(batch.campaign_batch_items?.[0]?.count ?? 0),
+        armedAt: batch.armed_at,
+      } : null,
+      campaign: null,
     });
   } catch {
     return NextResponse.json({ error: "Unable to check the cron slot." }, { status: 500 });

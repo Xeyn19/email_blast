@@ -7,7 +7,6 @@ import {
   campaignUsesRecipientPersonalization,
   getBrevoRecipientAttributes,
 } from "@/lib/campaigns/personalization";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   mapBrevoStatus,
   type CampaignStatus,
@@ -480,7 +479,7 @@ async function createBrevoDraft(
   return result.id;
 }
 
-export async function prepareAndArmCampaign(
+export async function prepareCampaign(
   supabase: SupabaseClient,
   campaignId: string,
   userId: string
@@ -489,7 +488,7 @@ export async function prepareAndArmCampaign(
 
   if (campaign.status !== "draft") {
     throw new CampaignServiceError(
-      "Only a draft campaign can be prepared for cron.",
+      "Only a draft campaign can be prepared.",
       409,
       "not_draft",
       campaign.id
@@ -497,26 +496,11 @@ export async function prepareAndArmCampaign(
   }
 
   if (campaign.cron_armed_at) {
-    return { campaignId: campaign.id, armedAt: campaign.cron_armed_at };
-  }
-
-  const admin = createAdminClient();
-  const { data: occupiedSlot } = await admin
-    .from("campaigns")
-    .select("id, user_id, name")
-    .not("cron_armed_at", "is", null)
-    .eq("status", "draft")
-    .neq("id", campaign.id)
-    .maybeSingle();
-
-  if (occupiedSlot) {
     throw new CampaignServiceError(
-      occupiedSlot.user_id === userId
-        ? `“${occupiedSlot.name}” is already waiting for cron. Remove it before preparing another campaign.`
-        : "Another campaign is already waiting for cron.",
+      "Remove this campaign from its delivery batch before preparing it again.",
       409,
-      "cron_slot_occupied",
-      occupiedSlot.user_id === userId ? occupiedSlot.id : campaign.id
+      "already_armed",
+      campaign.id
     );
   }
 
@@ -529,42 +513,53 @@ export async function prepareAndArmCampaign(
     configuration
   );
   await createBrevoDraft(supabase, campaign, listId, configuration);
+  return { campaignId: campaign.id, prepared: true as const };
+}
 
-  const armedAt = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("campaigns")
-    .update({ cron_armed_at: armedAt, last_error: null })
-    .eq("id", campaign.id)
-    .eq("user_id", userId)
-    .eq("status", "draft")
-    .is("cron_armed_at", null)
-    .select("id, cron_armed_at")
-    .maybeSingle();
+export async function refreshBatchAggregate(
+  supabase: SupabaseClient,
+  batchId: string
+) {
+  const { data: items, error } = await supabase
+    .from("campaign_batch_items")
+    .select("campaigns(status)")
+    .eq("batch_id", batchId);
 
-  if (error?.code === "23505") {
-    throw new CampaignServiceError(
-      "Another campaign entered the cron slot first. Remove it before trying again.",
-      409,
-      "cron_slot_occupied",
-      campaign.id
-    );
-  }
+  if (error || !items?.length) return;
 
-  if (error || !data) {
-    throw new CampaignServiceError(
-      "The campaign was prepared but could not be armed for cron.",
-      409,
-      "arm_failed",
-      campaign.id
-    );
-  }
+  const statuses = items
+    .map((item) => {
+      const campaign = Array.isArray(item.campaigns)
+        ? item.campaigns[0]
+        : item.campaigns;
+      return (campaign as { status?: CampaignStatus } | null)?.status;
+    })
+    .filter(Boolean) as CampaignStatus[];
 
-  return { campaignId: campaign.id, armedAt: data.cron_armed_at as string };
+  const hasActive = statuses.some(
+    (status) => status === "draft" || status === "sending"
+  );
+  const hasFailure = statuses.some((status) => status === "failed");
+  const nextStatus = hasActive
+    ? "sending"
+    : hasFailure
+      ? "completed_with_errors"
+      : "completed";
+
+  await supabase
+    .from("campaign_batches")
+    .update({
+      status: nextStatus,
+      ...(hasActive ? {} : { completed_at: new Date().toISOString() }),
+    })
+    .eq("id", batchId)
+    .eq("status", "sending");
 }
 
 export async function sendClaimedCampaign(
   admin: SupabaseClient,
-  campaignId: string
+  campaignId: string,
+  timeoutMs = 20_000,
 ) {
   const { data: campaign, error } = await admin
     .from("campaigns")
@@ -600,7 +595,7 @@ export async function sendClaimedCampaign(
         method: "POST",
         headers: brevoHeaders(apiKey),
         cache: "no-store",
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(timeoutMs),
       }
     );
 
@@ -649,7 +644,8 @@ export async function sendClaimedCampaign(
 export async function reconcileCampaignStatus(
   supabase: SupabaseClient,
   campaignId: string,
-  userId?: string
+  userId?: string,
+  timeoutMs = 15_000,
 ) {
   let query = supabase.from("campaigns").select("*").eq("id", campaignId);
   if (userId) query = query.eq("user_id", userId);
@@ -675,7 +671,7 @@ export async function reconcileCampaignStatus(
       method: "GET",
       headers: brevoHeaders(apiKey),
       cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     }
   );
   const result = await readJsonSafely(response);
@@ -717,6 +713,16 @@ export async function reconcileCampaignStatus(
       campaignId
     );
   }
+
+  const { data: batchItems } = await supabase
+    .from("campaign_batch_items")
+    .select("batch_id")
+    .eq("campaign_id", campaignId);
+  await Promise.all(
+    (batchItems ?? []).map((item) =>
+      refreshBatchAggregate(supabase, item.batch_id as string)
+    )
+  );
 
   return {
     status: mapped.status,
