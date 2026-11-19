@@ -8,6 +8,7 @@ import {
   getBrevoRecipientAttributes,
 } from "@/lib/campaigns/personalization";
 import {
+  deriveBatchAggregateStatus,
   mapBrevoStatus,
   type CampaignStatus,
 } from "@/lib/campaigns/status";
@@ -525,7 +526,13 @@ export async function refreshBatchAggregate(
     .select("campaigns(status)")
     .eq("batch_id", batchId);
 
-  if (error || !items?.length) return;
+  if (error) {
+    throw new CampaignServiceError(
+      "The delivery batch status could not be checked.",
+      500,
+      "batch_status_lookup_failed"
+    );
+  }
 
   const statuses = items
     .map((item) => {
@@ -536,24 +543,27 @@ export async function refreshBatchAggregate(
     })
     .filter(Boolean) as CampaignStatus[];
 
-  const hasActive = statuses.some(
-    (status) => status === "draft" || status === "sending"
-  );
-  const hasFailure = statuses.some((status) => status === "failed");
-  const nextStatus = hasActive
-    ? "sending"
-    : hasFailure
-      ? "completed_with_errors"
-      : "completed";
+  const nextStatus = deriveBatchAggregateStatus(statuses);
+  const terminal = nextStatus !== "sending";
 
-  await supabase
+  const { error: updateError } = await supabase
     .from("campaign_batches")
     .update({
       status: nextStatus,
-      ...(hasActive ? {} : { completed_at: new Date().toISOString() }),
+      ...(terminal ? { completed_at: new Date().toISOString() } : {}),
     })
     .eq("id", batchId)
     .eq("status", "sending");
+
+  if (updateError) {
+    throw new CampaignServiceError(
+      "The delivery batch status could not be saved.",
+      500,
+      "batch_status_update_failed"
+    );
+  }
+
+  return { batchId, status: nextStatus };
 }
 
 export async function sendClaimedCampaign(
