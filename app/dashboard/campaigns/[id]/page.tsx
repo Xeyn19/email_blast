@@ -113,7 +113,18 @@ async function CampaignDetailsContent({ params }: PageProps) {
           </section>
         ) : campaign.status === "draft" ? (
           <section className="armed-campaign-panel">
-            <div className="armed-campaign-main"><div className="armed-icon" aria-hidden="true">✓</div><div><h2>{prepared ? "Campaign prepared" : "Draft campaign"}</h2><p>{prepared ? "The Brevo draft is ready. Add it to a delivery batch for the next cron run." : "Review the campaign, then prepare it as a one-email delivery batch or combine it with other drafts."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></div>
+            <div className="armed-campaign-main">
+              <div className="armed-icon" aria-hidden="true">✓</div>
+              <div>
+                <h2>{deliveryBatch ? "Continue with the delivery batch" : prepared ? "Campaign prepared" : "Draft campaign"}</h2>
+                <p>{deliveryBatch ? `This email is already grouped in “${deliveryBatch.name}”. Prepare and add all campaigns to cron from the batch review page.` : prepared ? "The Brevo draft is ready. Continue to the delivery batch for the next cron run." : "Review the campaign, then prepare it as a one-email delivery batch or combine it with other drafts."}</p>
+              </div>
+              {deliveryBatch ? (
+                <Link href={`/dashboard/campaign-batches/${deliveryBatch.id}`} className="campaign-primary-button !ml-0">Continue delivery batch</Link>
+              ) : (
+                <CampaignCronControls campaignId={campaign.id} armed={false} canPrepare />
+              )}
+            </div>
           </section>
         ) : null}
 

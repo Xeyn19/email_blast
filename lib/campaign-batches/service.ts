@@ -376,11 +376,19 @@ export async function prepareBatch(
     );
   }
 
-  await supabase
+  const { error: preparingBatchError } = await supabase
     .from("campaign_batches")
     .update({ status: "preparing", last_error: null })
     .eq("id", batchId)
     .eq("user_id", userId);
+  if (preparingBatchError) {
+    throw new CampaignBatchError(
+      "Unable to start preparing this delivery batch.",
+      500,
+      "batch_preparation_start_failed",
+      batchId,
+    );
+  }
 
   const results = await mapWithConcurrency(items, PREPARATION_CONCURRENCY, async (item) => {
     if (item.preparation_status === "prepared") {
@@ -390,14 +398,22 @@ export async function prepareBatch(
         lastError: null,
       };
     }
-    await supabase
-      .from("campaign_batch_items")
-      .update({ preparation_status: "preparing", last_error: null })
-      .eq("id", item.id);
     try {
+      const { error: preparingItemError } = await supabase
+        .from("campaign_batch_items")
+        .update({ preparation_status: "preparing", last_error: null })
+        .eq("id", item.id);
+      if (preparingItemError) {
+        throw new CampaignBatchError(
+          "Unable to save the campaign preparation progress.",
+          500,
+          "batch_item_preparation_start_failed",
+          batchId,
+        );
+      }
       await prepareCampaign(supabase, item.campaign_id, userId);
       const preparedAt = new Date().toISOString();
-      await supabase
+      const { error: preparedItemError } = await supabase
         .from("campaign_batch_items")
         .update({
           preparation_status: "prepared",
@@ -405,23 +421,33 @@ export async function prepareBatch(
           prepared_at: preparedAt,
         })
         .eq("id", item.id);
+      if (preparedItemError) {
+        throw new CampaignBatchError(
+          "The Brevo draft was created, but its preparation status could not be saved.",
+          500,
+          "batch_item_preparation_save_failed",
+          batchId,
+        );
+      }
       return {
         campaignId: item.campaign_id as string,
         preparationStatus: "prepared" as const,
         lastError: null,
       };
     } catch (error) {
-      const message = error instanceof CampaignServiceError
+      const message = error instanceof CampaignServiceError || error instanceof CampaignBatchError
         ? error.message
         : "Campaign preparation failed unexpectedly.";
-      await supabase
+      const { error: failedItemError } = await supabase
         .from("campaign_batch_items")
         .update({ preparation_status: "failed", last_error: message })
         .eq("id", item.id);
       return {
         campaignId: item.campaign_id as string,
         preparationStatus: "failed" as const,
-        lastError: message,
+        lastError: failedItemError
+          ? `${message} The failure status could not be saved.`
+          : message,
       };
     }
   });
@@ -429,7 +455,7 @@ export async function prepareBatch(
   const preparedCount = results.filter((item) => item.preparationStatus === "prepared").length;
   const failedCount = results.length - preparedCount;
   const status = failedCount === 0 ? "prepared" : "draft";
-  await supabase
+  const { error: finishBatchError } = await supabase
     .from("campaign_batches")
     .update({
       status,
@@ -438,6 +464,14 @@ export async function prepareBatch(
     })
     .eq("id", batchId)
     .eq("user_id", userId);
+  if (finishBatchError) {
+    throw new CampaignBatchError(
+      "Campaigns were prepared, but the delivery batch status could not be saved.",
+      500,
+      "batch_preparation_finish_failed",
+      batchId,
+    );
+  }
 
   return { batchId, status, preparedCount, failedCount, items: results };
 }
@@ -457,9 +491,20 @@ export async function armBatch(batchId: string, userId: string) {
       batchId,
     );
   }
-  if (error || !result) {
+  if (error) {
+    const notReady = error.message?.includes("campaign_batch_not_ready");
     throw new CampaignBatchError(
-      "Prepare every campaign before adding this batch to cron.",
+      notReady
+        ? "Prepare every campaign before adding this batch to cron."
+        : "Unable to add this delivery batch to cron.",
+      notReady ? 409 : 500,
+      notReady ? "batch_not_ready" : "batch_arm_failed",
+      batchId,
+    );
+  }
+  if (!result) {
+    throw new CampaignBatchError(
+      "This delivery batch is not ready to be added to cron.",
       409,
       "batch_not_ready",
       batchId,

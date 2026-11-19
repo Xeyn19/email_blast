@@ -18,6 +18,10 @@ export function CampaignCronControls({ campaignId, armed, canPrepare, inBatch = 
         setError(result.error || "Unable to update the delivery batch.");
         return;
       }
+      if (method === "POST" && result.batchId) {
+        router.push(`/dashboard/campaign-batches/${result.batchId}`);
+        return;
+      }
       router.refresh();
     } catch {
       setError("Unable to update the delivery batch. Check your connection and try again.");

@@ -68,7 +68,7 @@ async function CampaignsContent() {
           <div>
             <h1 className="text-3xl font-bold">Campaigns</h1>
             <p className="mt-2 text-gray-400">
-              Create and manage your email campaigns.
+              Create campaigns, then group available drafts into one delivery batch.
             </p>
           </div>
 

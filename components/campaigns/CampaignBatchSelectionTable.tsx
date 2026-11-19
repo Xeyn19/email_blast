@@ -114,10 +114,12 @@ export function CampaignBatchSelectionTable({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <div>
           <strong className="block text-sm text-white">
-            {selectedIds.length} of 10 campaigns selected
+            {selectedIds.length > 0
+              ? `${selectedIds.length} of 10 campaigns selected`
+              : "Send several draft campaigns together"}
           </strong>
           <span className="mt-1 block text-xs text-gray-400">
-            Each campaign remains a separate email and will be sent during the same cron run.
+            Select available drafts, create one delivery batch, then review it before adding it to cron.
           </span>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -127,7 +129,7 @@ export function CampaignBatchSelectionTable({
             disabled={eligibleIds.length === 0 || working}
             className="campaign-secondary-button"
           >
-            {allEligibleSelected ? "Clear selection" : "Select eligible drafts"}
+            {allEligibleSelected ? "Clear selection" : "Select available drafts"}
           </button>
           <button
             type="button"
@@ -135,7 +137,7 @@ export function CampaignBatchSelectionTable({
             disabled={selectedIds.length === 0 || working}
             className="campaign-primary-button !ml-0"
           >
-            {working ? "Preparing selected…" : "Prepare selected for cron"}
+            {working ? "Creating delivery batch…" : "Create and review batch"}
           </button>
         </div>
       </div>
@@ -166,18 +168,24 @@ export function CampaignBatchSelectionTable({
               return (
                 <tr key={campaign.id} className="border-t border-white/10 transition hover:bg-white/[0.03]">
                   <td className="p-4 align-top">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(campaign.id)}
-                      disabled={!eligible || working}
-                      onChange={(event) => toggleCampaign(campaign.id, event.target.checked)}
-                      aria-label={`Select ${campaign.name} for the delivery batch`}
-                      className="h-4 w-4 accent-orange-500 disabled:cursor-not-allowed disabled:opacity-35"
-                    />
+                    {eligible ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(campaign.id)}
+                        disabled={working}
+                        onChange={(event) => toggleCampaign(campaign.id, event.target.checked)}
+                        aria-label={`Select ${campaign.name} for the delivery batch`}
+                        className="h-4 w-4 accent-orange-500"
+                      />
+                    ) : batchId ? (
+                      <span className="whitespace-nowrap text-xs font-semibold text-orange-300">In batch</span>
+                    ) : (
+                      <span className="text-gray-600" aria-hidden="true">—</span>
+                    )}
                   </td>
                   <td className="p-4 font-medium">{campaign.name}</td>
                   <td className="p-4 text-gray-400">{campaign.subject || "No subject"}</td>
-                  <td className="p-4 capitalize">{campaign.cron_armed_at ? "Waiting for cron" : campaign.status}</td>
+                  <td className="p-4 capitalize">{campaign.cron_armed_at ? "Waiting for cron" : batchId && campaign.status === "draft" ? "In delivery batch" : campaign.status}</td>
                   <td className="p-4 text-gray-400">{new Date(campaign.created_at).toLocaleDateString("en-PH")}</td>
                   <td className="p-4">
                     <div className="flex min-w-max flex-wrap items-start gap-2">

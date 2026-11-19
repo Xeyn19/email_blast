@@ -143,7 +143,8 @@ export function CampaignBatchReview({ batchId }: { batchId: string }) {
   if (loading) return <p className="py-12 text-sm text-gray-400">Loading delivery batch…</p>;
   if (!batch) return <p role="alert" className="rounded-xl border border-red-400/30 bg-red-950/30 p-4 text-red-200">{error || "Delivery batch not found."}</p>;
 
-  const canPrepare = batch.status === "draft" || batch.status === "prepared";
+  const canPrepare =
+    batch.status === "draft" && counts.prepared < counts.total;
   const canArm =
     (batch.status === "prepared" || batch.status === "draft") &&
     counts.total > 0 &&
@@ -166,12 +167,12 @@ export function CampaignBatchReview({ batchId }: { batchId: string }) {
           <div className="flex flex-wrap gap-2">
             {canPrepare ? (
               <button type="button" onClick={() => void runAction("prepare")} disabled={Boolean(working)} className="campaign-secondary-button">
-                {working === "prepare:POST" ? "Preparing…" : counts.failedPreparation > 0 ? "Retry preparation" : "Prepare campaigns"}
+                {working === "prepare:POST" ? "Preparing all campaigns…" : counts.failedPreparation > 0 ? "Retry failed campaigns" : "Prepare all campaigns"}
               </button>
             ) : null}
             {canArm ? (
               <button type="button" onClick={() => void runAction("cron")} disabled={Boolean(working)} className="campaign-primary-button !ml-0">
-                {working === "cron:POST" ? "Arming batch…" : `Arm ${counts.prepared} for cron`}
+                {working === "cron:POST" ? "Adding batch to cron…" : `Add ${counts.prepared} campaigns to cron`}
               </button>
             ) : null}
             {batch.status === "waiting" ? (
@@ -181,6 +182,12 @@ export function CampaignBatchReview({ batchId }: { batchId: string }) {
             ) : null}
           </div>
         </div>
+
+        <ol className="mt-6 grid gap-3 sm:grid-cols-3" aria-label="Delivery batch steps">
+          <BatchStep number="1" title="Review campaigns" complete={counts.total > 0} current={batch.status === "draft" && counts.prepared === 0} />
+          <BatchStep number="2" title="Prepare in Brevo" complete={counts.total > 0 && counts.prepared === counts.total} current={batch.status === "preparing" || (batch.status === "draft" && counts.prepared > 0)} />
+          <BatchStep number="3" title="Wait for cron" complete={["waiting", "sending", "completed", "completed_with_errors"].includes(batch.status)} current={batch.status === "prepared"} />
+        </ol>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Delivery batch progress">
           <SummaryCard label="Campaigns" value={counts.total} />
@@ -265,6 +272,22 @@ function PreparationStatus({ status, campaignStatus }: { status: BatchItem["prep
 function SummaryCard({ label, value, tone = "default" }: { label: string; value: number; tone?: "default" | "orange" | "green" | "red" }) {
   const tones = { default: "border-white/10", orange: "border-orange-400/30", green: "border-emerald-400/30", red: "border-red-400/30" };
   return <div className={`rounded-xl border bg-black/20 p-4 ${tones[tone]}`}><span className="text-xs text-gray-400">{label}</span><strong className="mt-1 block text-2xl text-white">{value}</strong></div>;
+}
+
+function BatchStep({ number, title, complete, current }: { number: string; title: string; complete: boolean; current: boolean }) {
+  const tone = complete
+    ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-100"
+    : current
+      ? "border-orange-400/50 bg-orange-500/10 text-orange-100"
+      : "border-white/10 bg-white/[0.02] text-gray-400";
+  return (
+    <li className={`flex items-center gap-3 rounded-xl border p-3 text-sm ${tone}`}>
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-current text-xs font-bold">
+        {complete ? "✓" : number}
+      </span>
+      <strong>{title}</strong>
+    </li>
+  );
 }
 
 function formatManilaDate(value: string) {
