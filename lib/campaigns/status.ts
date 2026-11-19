@@ -1,4 +1,8 @@
 export type CampaignStatus = "draft" | "sending" | "sent" | "failed";
+export type BatchAggregateStatus =
+  | "sending"
+  | "completed"
+  | "completed_with_errors";
 
 export type BrevoStatusResult = {
   status: CampaignStatus;
@@ -26,5 +30,19 @@ export function mapBrevoStatus(
   }
 
   return { status: currentStatus, terminal: false };
+}
+
+export function deriveBatchAggregateStatus(
+  statuses: CampaignStatus[]
+): BatchAggregateStatus {
+  if (statuses.some((status) => status === "sending")) {
+    return "sending";
+  }
+
+  if (statuses.length > 0 && statuses.every((status) => status === "sent")) {
+    return "completed";
+  }
+
+  return "completed_with_errors";
 }
 

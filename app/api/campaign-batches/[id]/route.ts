@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { runBatchWithConcurrency } from "@/lib/campaign-batches/execution";
 import {
+  CampaignServiceError,
   reconcileCampaignStatus,
   refreshBatchAggregate,
 } from "@/lib/campaigns/service";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -47,13 +49,20 @@ export async function GET(_request: Request, { params }: RouteContext) {
       return campaign?.status === "sending" ? [item.campaign_id as string] : [];
     });
 
-    if (sendingCampaignIds.length > 0) {
-      await runBatchWithConcurrency(
-        sendingCampaignIds,
-        3,
-        (campaignId) => reconcileCampaignStatus(supabase, campaignId, user.id, 5_000),
-      );
-      await refreshBatchAggregate(supabase, id);
+    try {
+      const admin = createAdminClient();
+      if (sendingCampaignIds.length > 0) {
+        await runBatchWithConcurrency(
+          sendingCampaignIds,
+          3,
+          (campaignId) =>
+            reconcileCampaignStatus(admin, campaignId, user.id, 5_000),
+        );
+      }
+
+      // Recalculate even when no campaigns remain in `sending`. That is the
+      // transition that closes a fully sent batch.
+      await refreshBatchAggregate(admin, id);
 
       const refreshed = await Promise.all([
         supabase
@@ -80,6 +89,12 @@ export async function GET(_request: Request, { params }: RouteContext) {
           { status: 500 },
         );
       }
+    } catch (error) {
+      const message =
+        error instanceof CampaignServiceError
+          ? error.message
+          : "Unable to refresh the delivery batch.";
+      return NextResponse.json({ error: message }, { status: 500 });
     }
   }
 
