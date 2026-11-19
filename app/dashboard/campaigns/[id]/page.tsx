@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { CampaignCronControls } from "@/components/campaigns/CampaignCronControls";
+import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
 import { CampaignStatusPoller } from "@/components/campaigns/CampaignStatusPoller";
 import { campaignUsesRecipientPersonalization } from "@/lib/campaigns/personalization";
 import { renderRecipientPreview } from "@/lib/email-templates/tokens";
@@ -25,9 +26,20 @@ async function CampaignDetailsContent({ params }: PageProps) {
   if (error || !campaign) notFound();
 
   const recipientIds: string[] = campaign.recipient_contact_ids ?? [];
-  const { data: recipients } = recipientIds.length
-    ? await supabase.from("contacts").select("id, full_name, company, email, status").eq("user_id", user.id).in("id", recipientIds)
-    : { data: [] };
+  const [recipientsResult, sourceCampaignResult, activeResendResult] = await Promise.all([
+    recipientIds.length
+      ? supabase.from("contacts").select("id, full_name, company, email, status").eq("user_id", user.id).in("id", recipientIds)
+      : Promise.resolve({ data: [] }),
+    campaign.source_campaign_id
+      ? supabase.from("campaigns").select("id, name").eq("id", campaign.source_campaign_id).eq("user_id", user.id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    campaign.status === "sent" || campaign.status === "failed"
+      ? supabase.from("campaigns").select("id, name, cron_armed_at").eq("source_campaign_id", campaign.id).eq("user_id", user.id).eq("status", "draft").maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const recipients = recipientsResult.data;
+  const sourceCampaign = sourceCampaignResult.data;
+  const activeResendDraft = activeResendResult.data;
 
   const armed = Boolean(campaign.cron_armed_at);
   const prepared = Boolean(campaign.brevo_synced_at && campaign.brevo_list_id && campaign.brevo_campaign_id);
@@ -53,9 +65,26 @@ async function CampaignDetailsContent({ params }: PageProps) {
         <Link href="/dashboard/campaigns" className="text-sm text-gray-300 transition hover:text-white">← Back to campaigns</Link>
 
         <header className="campaign-detail-header">
-          <div><h1>{campaign.name}</h1><p>Campaign details and delivery status.</p></div>
+          <div>
+            <h1>{campaign.name}</h1>
+            <p>Campaign details and delivery status.</p>
+            {sourceCampaign ? (
+              <p className="!mt-2 text-sm text-orange-200">
+                Created from <Link href={`/dashboard/campaigns/${sourceCampaign.id}`} className="font-semibold underline underline-offset-2">{sourceCampaign.name}</Link>.
+              </p>
+            ) : null}
+          </div>
           <span className={`campaign-detail-status status-${campaign.status}`}>{statusLabel}</span>
-          {campaign.status === "draft" && !armed && <Link href={`/dashboard/campaigns/${campaign.id}/edit`} className="campaign-secondary-button">Edit campaign</Link>}
+          <div className="ml-auto flex flex-wrap items-start gap-3 max-sm:ml-0 max-sm:w-full">
+            {campaign.status === "draft" && !armed ? <Link href={`/dashboard/campaigns/${campaign.id}/edit`} className="campaign-secondary-button max-sm:w-full max-sm:text-center">Edit campaign</Link> : null}
+            {campaign.status === "sent" ? (
+              activeResendDraft ? (
+                <Link href={`/dashboard/campaigns/${activeResendDraft.id}${activeResendDraft.cron_armed_at ? "" : "/edit"}`} className="campaign-primary-button !ml-0 max-sm:w-full max-sm:text-center">{activeResendDraft.cron_armed_at ? "View resend waiting for cron" : "Continue resend draft"}</Link>
+              ) : (
+                <EditAndResendButton campaignId={campaign.id} />
+              )
+            ) : null}
+          </div>
         </header>
 
         {armed ? (
@@ -73,7 +102,7 @@ async function CampaignDetailsContent({ params }: PageProps) {
           </section>
         ) : null}
 
-        {campaign.status === "failed" && <section className="campaign-failure-panel"><div><h2>Delivery needs attention</h2><p>{campaign.last_error || "Brevo could not complete this delivery. Review the campaign before another attempt."}</p></div><CampaignCronControls campaignId={campaign.id} armed={false} canPrepare /></section>}
+        {campaign.status === "failed" && <section className="campaign-failure-panel"><div><h2>Delivery needs attention</h2><p>{campaign.last_error || "Brevo could not complete this delivery. Create an editable resend draft to review the campaign before another attempt."}</p></div>{activeResendDraft ? <Link href={`/dashboard/campaigns/${activeResendDraft.id}${activeResendDraft.cron_armed_at ? "" : "/edit"}`} className="campaign-primary-button !ml-0">{activeResendDraft.cron_armed_at ? "View resend waiting for cron" : "Continue resend draft"}</Link> : <EditAndResendButton campaignId={campaign.id} />}</section>}
 
         <CampaignLifecycle status={campaign.status} armed={armed} prepared={prepared} />
         <CampaignStatusPoller campaignId={campaign.id} active={campaign.status === "sending"} />

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
 import { createClient } from "@/lib/supabase/server";
 
 export default function CampaignsPage() {
@@ -36,6 +37,24 @@ async function CampaignsContent() {
     .from("campaigns")
     .select("*")
     .order("created_at", { ascending: false });
+
+  const activeResendDraftBySource = new Map<
+    string,
+    { id: string; name: string; armed: boolean }
+  >();
+  for (const campaign of campaigns ?? []) {
+    if (
+      campaign.status === "draft" &&
+      campaign.source_campaign_id &&
+      !activeResendDraftBySource.has(campaign.source_campaign_id)
+    ) {
+      activeResendDraftBySource.set(campaign.source_campaign_id, {
+        id: campaign.id,
+        name: campaign.name,
+        armed: Boolean(campaign.cron_armed_at),
+      });
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[#0b0b0b] p-6 text-white md:p-10">
@@ -111,12 +130,28 @@ async function CampaignsContent() {
                     </td>
 
                     <td className="p-4">
-                      <Link
-                        href={`/dashboard/campaigns/${campaign.id}`}
-                        className="inline-block whitespace-nowrap rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
-                      >
-                        Open Campaign
-                      </Link>
+                      <div className="flex min-w-max flex-wrap items-start gap-2">
+                        <Link
+                          href={`/dashboard/campaigns/${campaign.id}`}
+                          className="inline-block whitespace-nowrap rounded-lg border border-white/30 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/[0.06]"
+                        >
+                          Open Campaign
+                        </Link>
+                        {(campaign.status === "sent" || campaign.status === "failed") ? (
+                          activeResendDraftBySource.has(campaign.id) ? (
+                            <Link
+                              href={`/dashboard/campaigns/${activeResendDraftBySource.get(campaign.id)?.id}${activeResendDraftBySource.get(campaign.id)?.armed ? "" : "/edit"}`}
+                              className="inline-block whitespace-nowrap rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-orange-600"
+                            >
+                              {activeResendDraftBySource.get(campaign.id)?.armed
+                                ? "View resend waiting for cron"
+                                : "Continue resend draft"}
+                            </Link>
+                          ) : (
+                            <EditAndResendButton campaignId={campaign.id} compact />
+                          )
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

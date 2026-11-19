@@ -16,32 +16,6 @@ export async function POST(_request: Request, { params }: RouteContext) {
   if (error || !user) return NextResponse.json({ error: "Your session has expired. Please log in again." }, { status: 401 });
 
   try {
-    const { data: existingCampaign } = await supabase
-      .from("campaigns")
-      .select("status")
-      .eq("id", id)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (existingCampaign?.status === "failed") {
-      const { error: resetError } = await supabase
-        .from("campaigns")
-        .update({
-          status: "draft",
-          brevo_campaign_id: null,
-          brevo_synced_at: null,
-          last_error: null,
-          send_attempted_at: null,
-          status_checked_at: null,
-        })
-        .eq("id", id)
-        .eq("user_id", user.id)
-        .eq("status", "failed");
-      if (resetError) {
-        return NextResponse.json({ error: "Unable to reset this campaign for another attempt." }, { status: 500 });
-      }
-    }
-
     const result = await prepareAndArmCampaign(supabase, id, user.id);
     return NextResponse.json({ success: true, ...result, status: "waiting_for_cron" });
   } catch (serviceError) {
