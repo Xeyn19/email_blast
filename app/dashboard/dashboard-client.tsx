@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -57,9 +57,7 @@ export default function DashboardClient({
   user,
   initialView,
 }: DashboardClientProps) {
-  const [activeView, setActiveView] = useState<
-    "Overview" | "Contacts"
-  >(initialView);
+  const activeView = initialView;
 
   const [search, setSearch] = useState("");
 
@@ -72,6 +70,15 @@ export default function DashboardClient({
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
   const [contactsError, setContactsError] = useState("");
+  const [contactSearch, setContactSearch] = useState("");
+  const [contactStatusFilter, setContactStatusFilter] = useState<
+    "all" | Contact["status"]
+  >("all");
+  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+  const [bulkContactStatus, setBulkContactStatus] =
+    useState<Contact["status"]>("subscribed");
+  const [updatingContactIds, setUpdatingContactIds] = useState<string[]>([]);
+  const [contactStatusMessage, setContactStatusMessage] = useState("");
 
   // Add contact modal states
   const [showContactForm, setShowContactForm] = useState(false);
@@ -87,11 +94,6 @@ export default function DashboardClient({
   const [csvImportResult, setCsvImportResult] = useState("");
   const [csvPermissionConfirmed, setCsvPermissionConfirmed] =
     useState(false);
-
-  // Keep the displayed view synchronized with the current route.
-  useEffect(() => {
-    setActiveView(initialView);
-  }, [initialView]);
 
   // Load campaigns belonging to the logged-in user.
   const loadCampaigns = useCallback(async () => {
@@ -141,15 +143,15 @@ export default function DashboardClient({
   }, []);
 
   useEffect(() => {
-    if (activeView === "Overview") {
-      loadCampaigns();
-    }
+    if (activeView !== "Overview") return;
+    const timer = window.setTimeout(() => void loadCampaigns(), 0);
+    return () => window.clearTimeout(timer);
   }, [activeView, loadCampaigns]);
 
   useEffect(() => {
-    if (activeView === "Contacts") {
-      loadContacts();
-    }
+    if (activeView !== "Contacts") return;
+    const timer = window.setTimeout(() => void loadContacts(), 0);
+    return () => window.clearTimeout(timer);
   }, [activeView, loadContacts]);
 
   // Add a single contact.
@@ -487,44 +489,130 @@ export default function DashboardClient({
     }
   }
 
-  // Change a contact's subscription status.
+  async function updateContactStatuses(
+    contactIds: string[],
+    nextStatus: Contact["status"]
+  ) {
+    setContactsError("");
+    setContactStatusMessage("");
+    setUpdatingContactIds(contactIds);
+
+    try {
+      const response = await fetch("/api/contacts/status", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds, status: nextStatus }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        updatedCount?: number;
+      };
+
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to update contact status.");
+      }
+
+      setContacts((currentContacts) =>
+        currentContacts.map((contact) =>
+          contactIds.includes(contact.id)
+            ? { ...contact, status: nextStatus }
+            : contact
+        )
+      );
+
+      return result.updatedCount ?? contactIds.length;
+    } finally {
+      setUpdatingContactIds([]);
+    }
+  }
+
+  // Change a single contact's subscription status.
   async function handleUpdateContactStatus(
     contactId: string,
     nextStatus: Contact["status"]
   ) {
-    setContactsError("");
-
-    const supabase = createClient();
-
-    const updateData: {
-      status: Contact["status"];
-      consent_source?: string;
-      consented_at?: string;
-      unsubscribed_at?: string | null;
-    } = {
-      status: nextStatus,
-    };
-
-    if (nextStatus === "subscribed") {
-      updateData.consent_source =
-        "User-confirmed permission";
-      updateData.consented_at = new Date().toISOString();
-      updateData.unsubscribed_at = null;
-    } else if (nextStatus === "unsubscribed") {
-      updateData.unsubscribed_at = new Date().toISOString();
+    try {
+      await updateContactStatuses([contactId], nextStatus);
+      setContactStatusMessage("Contact status updated.");
+    } catch (error) {
+      setContactsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update contact status."
+      );
     }
+  }
 
-    const { error } = await supabase
-      .from("contacts")
-      .update(updateData)
-      .eq("id", contactId);
+  const filteredContacts = useMemo(() => {
+    const normalizedSearch = contactSearch.trim().toLowerCase();
 
-    if (error) {
-      setContactsError(error.message);
-      return;
+    return contacts.filter((contact) => {
+      const matchesStatus =
+        contactStatusFilter === "all" || contact.status === contactStatusFilter;
+      const matchesSearch =
+        !normalizedSearch ||
+        [contact.full_name, contact.email, contact.company].some((value) =>
+          value?.toLowerCase().includes(normalizedSearch)
+        );
+
+      return matchesStatus && matchesSearch;
+    });
+  }, [contactSearch, contactStatusFilter, contacts]);
+
+  const filteredContactIds = filteredContacts.map((contact) => contact.id);
+  const allFilteredContactsSelected =
+    filteredContactIds.length > 0 &&
+    filteredContactIds.every((id) => selectedContactIds.includes(id));
+  const someFilteredContactsSelected =
+    filteredContactIds.some((id) => selectedContactIds.includes(id)) &&
+    !allFilteredContactsSelected;
+  const isUpdatingContacts = updatingContactIds.length > 0;
+
+  function toggleAllFilteredContacts() {
+    setContactStatusMessage("");
+    setSelectedContactIds((currentIds) => {
+      if (allFilteredContactsSelected) {
+        return currentIds.filter((id) => !filteredContactIds.includes(id));
+      }
+
+      return Array.from(new Set([...currentIds, ...filteredContactIds]));
+    });
+  }
+
+  function toggleContactSelection(contactId: string) {
+    setContactStatusMessage("");
+    setSelectedContactIds((currentIds) =>
+      currentIds.includes(contactId)
+        ? currentIds.filter((id) => id !== contactId)
+        : [...currentIds, contactId]
+    );
+  }
+
+  function changeContactStatusFilter(status: "all" | Contact["status"]) {
+    setContactStatusFilter(status);
+    setSelectedContactIds([]);
+    setContactStatusMessage("");
+  }
+
+  async function handleBulkContactStatusUpdate() {
+    if (selectedContactIds.length === 0) return;
+
+    try {
+      const updatedCount = await updateContactStatuses(
+        selectedContactIds,
+        bulkContactStatus
+      );
+      setContactStatusMessage(
+        `${updatedCount} contact${updatedCount === 1 ? "" : "s"} changed to ${bulkContactStatus}.`
+      );
+      setSelectedContactIds([]);
+    } catch (error) {
+      setContactsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the selected contacts."
+      );
     }
-
-    await loadContacts();
   }
 
   const filteredCampaigns = campaigns.filter((campaign) =>
@@ -593,6 +681,12 @@ export default function DashboardClient({
             {contactsError && (
               <div className="dashboard-notice" role="alert">
                 {contactsError}
+              </div>
+            )}
+
+            {contactStatusMessage && (
+              <div className="dashboard-success" role="status">
+                {contactStatusMessage}
               </div>
             )}
 
@@ -769,15 +863,29 @@ export default function DashboardClient({
             )}
 
             {/* Contact statistics */}
-            <div className="stats-grid">
-              <div className="stat-card">
+            <div className="stats-grid contact-stats" aria-label="Contact status filters">
+              <button
+                type="button"
+                className={`stat-card contact-stat-card ${
+                  contactStatusFilter === "all" ? "is-active" : ""
+                }`}
+                onClick={() => changeContactStatusFilter("all")}
+                aria-pressed={contactStatusFilter === "all"}
+              >
                 <div className="stat-top">Total contacts</div>
                 <strong className="stat-number">
                   {contacts.length}
                 </strong>
-              </div>
+              </button>
 
-              <div className="stat-card">
+              <button
+                type="button"
+                className={`stat-card contact-stat-card ${
+                  contactStatusFilter === "subscribed" ? "is-active" : ""
+                }`}
+                onClick={() => changeContactStatusFilter("subscribed")}
+                aria-pressed={contactStatusFilter === "subscribed"}
+              >
                 <div className="stat-top">Subscribed</div>
                 <strong className="stat-number">
                   {
@@ -787,9 +895,16 @@ export default function DashboardClient({
                     ).length
                   }
                 </strong>
-              </div>
+              </button>
 
-              <div className="stat-card">
+              <button
+                type="button"
+                className={`stat-card contact-stat-card ${
+                  contactStatusFilter === "pending" ? "is-active" : ""
+                }`}
+                onClick={() => changeContactStatusFilter("pending")}
+                aria-pressed={contactStatusFilter === "pending"}
+              >
                 <div className="stat-top">Pending</div>
                 <strong className="stat-number">
                   {
@@ -799,9 +914,16 @@ export default function DashboardClient({
                     ).length
                   }
                 </strong>
-              </div>
+              </button>
 
-              <div className="stat-card">
+              <button
+                type="button"
+                className={`stat-card contact-stat-card ${
+                  contactStatusFilter === "unsubscribed" ? "is-active" : ""
+                }`}
+                onClick={() => changeContactStatusFilter("unsubscribed")}
+                aria-pressed={contactStatusFilter === "unsubscribed"}
+              >
                 <div className="stat-top">Unsubscribed</div>
                 <strong className="stat-number">
                   {
@@ -811,7 +933,7 @@ export default function DashboardClient({
                     ).length
                   }
                 </strong>
-              </div>
+              </button>
             </div>
 
             {/* All contacts */}
@@ -820,10 +942,126 @@ export default function DashboardClient({
                 <div>
                   <h2>All contacts</h2>
                   <p>
-                    Your saved contacts from Supabase.
+                    Search, select, and update one or several contacts.
                   </p>
                 </div>
               </div>
+
+              <div className="contact-toolbar">
+                <label className="contact-search-field">
+                  <span>Search contacts</span>
+                  <input
+                    type="search"
+                    value={contactSearch}
+                    onChange={(event) => {
+                      setContactSearch(event.target.value);
+                      setSelectedContactIds([]);
+                      setContactStatusMessage("");
+                    }}
+                    placeholder="Name, email, or company"
+                  />
+                </label>
+
+                <label className="contact-filter-field">
+                  <span>Show status</span>
+                  <select
+                    value={contactStatusFilter}
+                    onChange={(event) =>
+                      changeContactStatusFilter(
+                        event.target.value as "all" | Contact["status"]
+                      )
+                    }
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="subscribed">Subscribed</option>
+                    <option value="pending">Pending</option>
+                    <option value="unsubscribed">Unsubscribed</option>
+                  </select>
+                </label>
+
+                <div className="contact-result-summary" aria-live="polite">
+                  <strong>{filteredContacts.length}</strong>
+                  <span>
+                    result{filteredContacts.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="contact-selection-bar">
+                <div>
+                  <strong>
+                    {selectedContactIds.length} contact
+                    {selectedContactIds.length === 1 ? "" : "s"} selected
+                  </strong>
+                  <span>
+                    Selection applies only to contacts you explicitly choose.
+                  </span>
+                </div>
+
+                <div className="contact-selection-actions">
+                  <button
+                    type="button"
+                    className="contact-secondary-button"
+                    onClick={toggleAllFilteredContacts}
+                    disabled={filteredContacts.length === 0 || isUpdatingContacts}
+                  >
+                    {allFilteredContactsSelected
+                      ? "Unselect shown contacts"
+                      : `Select all ${filteredContacts.length} shown`}
+                  </button>
+                  <button
+                    type="button"
+                    className="contact-link-button"
+                    onClick={() => setSelectedContactIds([])}
+                    disabled={selectedContactIds.length === 0 || isUpdatingContacts}
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              </div>
+
+              {selectedContactIds.length > 0 && (
+                <div className="contact-bulk-bar" role="region" aria-label="Bulk contact status">
+                  <div>
+                    <strong>Change subscription status</strong>
+                    <span>
+                      This will update {selectedContactIds.length} selected contact
+                      {selectedContactIds.length === 1 ? "" : "s"}.
+                      {bulkContactStatus === "subscribed" &&
+                        " Only use Subscribed for contacts who gave permission to receive marketing email."}
+                    </span>
+                  </div>
+
+                  <div className="contact-bulk-actions">
+                    <label>
+                      <span className="sr-only">New subscription status</span>
+                      <select
+                        value={bulkContactStatus}
+                        onChange={(event) =>
+                          setBulkContactStatus(
+                            event.target.value as Contact["status"]
+                          )
+                        }
+                        disabled={isUpdatingContacts}
+                      >
+                        <option value="subscribed">Subscribed</option>
+                        <option value="pending">Pending</option>
+                        <option value="unsubscribed">Unsubscribed</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="create-btn"
+                      onClick={handleBulkContactStatusUpdate}
+                      disabled={isUpdatingContacts}
+                    >
+                      {isUpdatingContacts
+                        ? "Updating contacts..."
+                        : `Apply to ${selectedContactIds.length}`}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {contactsLoading ? (
                 <p className="empty-state">
@@ -834,11 +1072,31 @@ export default function DashboardClient({
                   No contacts yet. Click Add Contact to get
                   started.
                 </p>
+              ) : filteredContacts.length === 0 ? (
+                <p className="empty-state">
+                  No contacts match your search or status filter.
+                </p>
               ) : (
                 <div className="campaign-table-wrap">
-                  <table className="campaign-table">
+                  <table className="campaign-table contact-table">
                     <thead>
                       <tr>
+                        <th className="contact-checkbox-cell">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredContactsSelected}
+                            ref={(input) => {
+                              if (input) input.indeterminate = someFilteredContactsSelected;
+                            }}
+                            onChange={toggleAllFilteredContacts}
+                            aria-label={
+                              allFilteredContactsSelected
+                                ? "Unselect all shown contacts"
+                                : "Select all shown contacts"
+                            }
+                            disabled={isUpdatingContacts}
+                          />
+                        </th>
                         <th>NAME</th>
                         <th>EMAIL</th>
                         <th>COMPANY</th>
@@ -847,8 +1105,24 @@ export default function DashboardClient({
                     </thead>
 
                     <tbody>
-                      {contacts.map((contact) => (
-                        <tr key={contact.id}>
+                      {filteredContacts.map((contact) => (
+                        <tr
+                          key={contact.id}
+                          className={
+                            selectedContactIds.includes(contact.id)
+                              ? "is-selected"
+                              : undefined
+                          }
+                        >
+                          <td className="contact-checkbox-cell">
+                            <input
+                              type="checkbox"
+                              checked={selectedContactIds.includes(contact.id)}
+                              onChange={() => toggleContactSelection(contact.id)}
+                              aria-label={`Select ${contact.full_name || contact.email}`}
+                              disabled={isUpdatingContacts}
+                            />
+                          </td>
                           <td>
                             {contact.full_name || "—"}
                           </td>
@@ -864,6 +1138,7 @@ export default function DashboardClient({
                                 )
                               }
                               aria-label={`Subscription status for ${contact.email}`}
+                              disabled={isUpdatingContacts}
                               className={`status-badge status-${contact.status}`}
                               style={{
                                 border: "1px solid #e5e7eb",
@@ -902,7 +1177,7 @@ export default function DashboardClient({
                 <h2>Welcome back, {user.name}! 👋</h2>
 
                 <p>
-                  Here's what's happening with your email
+                  Here&apos;s what&apos;s happening with your email
                   campaigns.
                 </p>
               </div>
@@ -914,7 +1189,7 @@ export default function DashboardClient({
               <div>
                 <h2>Campaign overview</h2>
                 <p>
-                  Here's your actual campaign summary.
+                  Here&apos;s your actual campaign summary.
                 </p>
               </div>
             </div>
