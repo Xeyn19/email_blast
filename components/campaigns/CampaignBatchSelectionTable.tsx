@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
 import { CampaignArchiveButton } from "@/components/campaigns/CampaignArchiveButton";
 import {
+  getEligibleBatchCampaignIds,
   getCampaignDisplayStatus,
+  retainEligibleBatchSelection,
   type CampaignDeliveryMembership,
   type CampaignDisplayStatus,
 } from "@/lib/campaigns/dashboard";
@@ -42,20 +44,23 @@ export function CampaignBatchSelectionTable({
   const [error, setError] = useState("");
 
   const eligibleIds = useMemo(
-    () =>
-      campaigns
-        .filter(
-          (campaign) =>
-            campaign.status === "draft" &&
-            !campaign.cron_armed_at &&
-            !batchMemberships[campaign.id],
-        )
-        .map((campaign) => campaign.id),
+    () => getEligibleBatchCampaignIds(
+      campaigns.map((campaign) => ({
+        id: campaign.id,
+        status: campaign.status,
+        cronArmedAt: campaign.cron_armed_at,
+      })),
+      batchMemberships,
+    ),
     [batchMemberships, campaigns],
+  );
+  const validSelectedIds = useMemo(
+    () => retainEligibleBatchSelection(selectedIds, eligibleIds),
+    [eligibleIds, selectedIds],
   );
   const allEligibleSelected =
     eligibleIds.length > 0 &&
-    eligibleIds.every((campaignId) => selectedIds.includes(campaignId));
+    eligibleIds.every((campaignId) => validSelectedIds.includes(campaignId));
 
   function closeSelectionMode() {
     setSelectionMode(false);
@@ -66,13 +71,14 @@ export function CampaignBatchSelectionTable({
   function toggleCampaign(campaignId: string, checked: boolean) {
     setError("");
     setSelectedIds((current) => {
-      if (!checked) return current.filter((id) => id !== campaignId);
-      if (current.includes(campaignId)) return current;
-      if (current.length >= 10) {
+      const eligibleSelection = retainEligibleBatchSelection(current, eligibleIds);
+      if (!checked) return eligibleSelection.filter((id) => id !== campaignId);
+      if (eligibleSelection.includes(campaignId)) return eligibleSelection;
+      if (eligibleSelection.length >= 10) {
         setError("A delivery batch can contain up to 10 campaigns.");
-        return current;
+        return eligibleSelection;
       }
-      return [...current, campaignId];
+      return [...eligibleSelection, campaignId];
     });
   }
 
@@ -87,7 +93,7 @@ export function CampaignBatchSelectionTable({
   }
 
   async function prepareSelected() {
-    if (selectedIds.length === 0) {
+    if (validSelectedIds.length === 0) {
       setError("Select at least one editable draft campaign.");
       return;
     }
@@ -98,7 +104,7 @@ export function CampaignBatchSelectionTable({
       const createResponse = await fetch("/api/campaign-batches", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ campaignIds: selectedIds }),
+        body: JSON.stringify({ campaignIds: validSelectedIds }),
       });
       const created = await createResponse.json();
       if (!createResponse.ok || !created.batchId) {
@@ -146,7 +152,7 @@ export function CampaignBatchSelectionTable({
         <div>
           <strong className="block text-sm text-white">
             {selectionMode
-              ? `${selectedIds.length} of 10 drafts selected`
+              ? `${validSelectedIds.length} of 10 drafts selected`
               : "Campaign actions"}
           </strong>
           <span className="mt-1 block text-xs text-gray-400">
@@ -177,12 +183,12 @@ export function CampaignBatchSelectionTable({
               <button
                 type="button"
                 onClick={() => void prepareSelected()}
-                disabled={selectedIds.length === 0 || working}
+                disabled={validSelectedIds.length === 0 || working}
                 className="campaign-primary-button !ml-0"
               >
                 {working
                   ? "Creating delivery batch…"
-                  : `Create batch (${selectedIds.length})`}
+                  : `Create batch (${validSelectedIds.length})`}
               </button>
             </>
           ) : (
@@ -263,7 +269,7 @@ export function CampaignBatchSelectionTable({
                       {eligible ? (
                         <input
                           type="checkbox"
-                          checked={selectedIds.includes(campaign.id)}
+                          checked={validSelectedIds.includes(campaign.id)}
                           disabled={working}
                           onChange={(event) =>
                             toggleCampaign(campaign.id, event.target.checked)
