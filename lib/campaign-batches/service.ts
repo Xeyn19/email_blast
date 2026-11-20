@@ -159,6 +159,39 @@ export async function createBatchFromCampaigns(
     );
   }
 
+  const admin = createAdminClient();
+  const { data: existingItems, error: membershipError } = await admin
+    .from("campaign_batch_items")
+    .select(
+      "campaign_id, campaign_batches!inner(name, user_id)",
+    )
+    .in("campaign_id", ids)
+    .eq("campaign_batches.user_id", userId);
+
+  if (membershipError) {
+    throw new CampaignBatchError(
+      "Unable to verify whether the selected campaigns are available.",
+      500,
+      "batch_membership_lookup_failed",
+    );
+  }
+
+  const existingItem = existingItems?.[0];
+  if (existingItem) {
+    const conflictingCampaign = byId.get(existingItem.campaign_id as string);
+    const batchRelation = Array.isArray(existingItem.campaign_batches)
+      ? existingItem.campaign_batches[0]
+      : existingItem.campaign_batches;
+    const campaignName = conflictingCampaign?.name || "A selected campaign";
+    const batchName = batchRelation?.name || "an existing delivery batch";
+
+    throw new CampaignBatchError(
+      `“${campaignName}” already belongs to “${batchName}”. Open that batch or select a different draft.`,
+      409,
+      "campaign_already_batched",
+    );
+  }
+
   return insertBatch(
     supabase,
     userId,

@@ -14,6 +14,31 @@ export type CampaignDeliveryMembership = {
   preparationStatus: string;
 };
 
+export function getEligibleBatchCampaignIds(
+  campaigns: Array<{
+    id: string;
+    status: string;
+    cronArmedAt: string | null;
+  }>,
+  memberships: Record<string, CampaignDeliveryMembership>,
+) {
+  return campaigns.flatMap((campaign) =>
+    campaign.status === "draft" &&
+    !campaign.cronArmedAt &&
+    !memberships[campaign.id]
+      ? [campaign.id]
+      : [],
+  );
+}
+
+export function retainEligibleBatchSelection(
+  selectedIds: string[],
+  eligibleIds: string[],
+) {
+  const eligibleIdSet = new Set(eligibleIds);
+  return selectedIds.filter((campaignId) => eligibleIdSet.has(campaignId));
+}
+
 export function getCampaignDisplayStatus(
   campaign: {
     status: string;
