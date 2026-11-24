@@ -18,6 +18,7 @@ type EmailTemplateRow = {
   asset_urls: string[] | null;
   default_subject: string | null;
   default_preview_text: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -38,6 +39,7 @@ function serializeTemplate(template: EmailTemplateRow) {
     sourceFilename: template.source_filename,
     htmlContent: template.html_content,
     assetUrls: template.asset_urls ?? [],
+    archived: Boolean(template.archived_at),
     createdAt: template.created_at,
     updatedAt: template.updated_at,
   };
@@ -60,7 +62,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("email_templates")
     .select(
-      "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, created_at, updated_at",
+      "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, archived_at, created_at, updated_at",
     )
     .eq("user_id", user.id)
     .is("archived_at", null)
@@ -205,7 +207,7 @@ export async function POST(request: Request) {
         updated_at: now,
       })
       .select(
-        "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, created_at, updated_at",
+        "id, name, source_filename, html_content, asset_urls, default_subject, default_preview_text, archived_at, created_at, updated_at",
       )
       .single();
 

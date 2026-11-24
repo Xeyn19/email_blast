@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { TemplateDeleteDialog } from "@/components/campaigns/TemplateDeleteDialog";
 import { emailHtmlToText, textToEmailHtml } from "@/lib/campaigns/content";
 import { getCampaignDetailsFromTemplate } from "@/lib/email-templates/campaign-defaults";
+import {
+  MAX_TEMPLATES_PER_BATCH,
+  canSelectTemplate,
+  removeTemplateFromLibraryState,
+} from "@/lib/email-templates/library";
 import {
   RECIPIENT_NAME_TOKEN,
   renderRecipientPreview,
@@ -28,6 +34,7 @@ type SavedEmailTemplate = {
   defaultCampaignName?: string | null;
   defaultSubject?: string | null;
   defaultPreviewText?: string | null;
+  archived?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -46,6 +53,8 @@ type CronSlot = {
 
 export function CampaignForm({ campaignId }: { campaignId?: string }) {
   const router = useRouter();
+  const templateUploadRef = useRef<HTMLDivElement>(null);
+  const templateNameInputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [previewText, setPreviewText] = useState("");
@@ -61,8 +70,14 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
   const [templateName, setTemplateName] = useState("");
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templateError, setTemplateError] = useState("");
+  const [templateNotice, setTemplateNotice] = useState("");
   const [uploadingTemplate, setUploadingTemplate] = useState(false);
-  const [archivingTemplate, setArchivingTemplate] = useState(false);
+  const [showTemplateUploader, setShowTemplateUploader] = useState(false);
+  const [templatePendingDelete, setTemplatePendingDelete] =
+    useState<SavedEmailTemplate | null>(null);
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(
+    null,
+  );
   const [previewContactId, setPreviewContactId] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
@@ -135,6 +150,7 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
           }
         }
         setTemplates(loadedTemplates);
+        if (loadedTemplates.length === 0) setShowTemplateUploader(true);
         const initialTemplateId = campaignTemplateId || loadedTemplates[0]?.id || "";
         setTemplateId(initialTemplateId);
         if (initialTemplateId) {
@@ -200,6 +216,10 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
         : activeTemplate.htmlContent
       : textToEmailHtml(content || "Your email preview will appear here.");
 
+  const closeTemplateDeleteDialog = useCallback(() => {
+    setTemplatePendingDelete(null);
+  }, []);
+
   function getTemplateDetails(template: SavedEmailTemplate) {
     const defaults = getCampaignDetailsFromTemplate(template);
     return {
@@ -247,9 +267,12 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
 
   function toggleTemplate(template: SavedEmailTemplate, selected: boolean) {
     setTemplateError("");
+    setTemplateNotice("");
     if (selected) {
-      if (selectedTemplateIds.length >= 10) {
-        setTemplateError("A delivery batch can contain up to 10 email templates.");
+      if (!canSelectTemplate(selectedTemplateIds, template.id)) {
+        setTemplateError(
+          `A delivery batch can contain up to ${MAX_TEMPLATES_PER_BATCH} email templates. Your saved-template library has no application limit.`,
+        );
         return;
       }
       setSelectedTemplateIds((current) => [...current, template.id]);
@@ -287,6 +310,7 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
 
   async function uploadTemplate() {
     setTemplateError("");
+    setTemplateNotice("");
     if (!templateFile) {
       setTemplateError("Choose an HTML template file.");
       return;
@@ -310,17 +334,21 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
 
       const uploaded = result.template as SavedEmailTemplate;
       setTemplates((current) => [uploaded, ...current]);
-      if (selectedTemplateIds.length < 10) {
+      if (campaignId || selectedTemplateIds.length < MAX_TEMPLATES_PER_BATCH) {
         setTemplateId(uploaded.id);
-        setSelectedTemplateIds((current) => [...current, uploaded.id]);
+        setSelectedTemplateIds((current) =>
+          campaignId ? [uploaded.id] : [...current, uploaded.id],
+        );
         applyTemplateDefaults(uploaded);
+        setTemplateNotice("Template uploaded and selected for this campaign.");
       } else {
-        setTemplateError(
-          "The template was uploaded, but the current delivery batch already has 10 selected templates.",
+        setTemplateNotice(
+          `Template uploaded to your library. This batch already has ${MAX_TEMPLATES_PER_BATCH} selected templates.`,
         );
       }
       setTemplateName("");
       setTemplateFile(null);
+      setShowTemplateUploader(false);
     } catch {
       setTemplateError("Unable to upload the email template. Try again.");
     } finally {
@@ -328,42 +356,61 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
     }
   }
 
-  async function archiveTemplate() {
-    if (!activeTemplate) return;
+  async function deleteTemplate() {
+    if (!templatePendingDelete || templatePendingDelete.archived) return;
     setTemplateError("");
-    setArchivingTemplate(true);
+    setTemplateNotice("");
+    setDeletingTemplateId(templatePendingDelete.id);
     try {
-      const response = await fetch(`/api/email-templates/${activeTemplate.id}`, {
+      const response = await fetch(`/api/email-templates/${templatePendingDelete.id}`, {
         method: "DELETE",
       });
       const result = await response.json();
       if (!response.ok) {
-        setTemplateError(result.error || "Unable to archive the template.");
+        setTemplateError(result.error || "Unable to delete the template.");
+        setTemplatePendingDelete(null);
         return;
       }
 
       const remaining = templates.filter(
-        (template) => template.id !== activeTemplate.id
+        (template) => template.id !== templatePendingDelete.id,
       );
       setTemplates(remaining);
-      const remainingSelectedIds = selectedTemplateIds.filter(
-        (id) => id !== activeTemplate.id,
+      const nextState = removeTemplateFromLibraryState({
+        templateId: templatePendingDelete.id,
+        selectedTemplateIds,
+        previewTemplateId: templateId,
+      });
+      setSelectedTemplateIds(nextState.selectedTemplateIds);
+      setTemplateId(nextState.previewTemplateId);
+      setTemplateCampaignDetails((current) => {
+        const next = { ...current };
+        delete next[templatePendingDelete.id];
+        return next;
+      });
+      setTemplateNotice(
+        `${templatePendingDelete.name} was deleted from your saved templates.`,
       );
-      setSelectedTemplateIds(remainingSelectedIds);
-      const nextTemplate =
-        remaining.find((template) => remainingSelectedIds.includes(template.id)) ??
-        remaining[0] ??
-        null;
-      setTemplateId(nextTemplate?.id ?? "");
-      if (nextTemplate && remainingSelectedIds.length === 0) {
-        setSelectedTemplateIds([nextTemplate.id]);
-        applyTemplateDefaults(nextTemplate);
-      }
+      setTemplatePendingDelete(null);
     } catch {
-      setTemplateError("Unable to archive the template. Try again.");
+      setTemplateError("Unable to delete the template. Try again.");
+      setTemplatePendingDelete(null);
     } finally {
-      setArchivingTemplate(false);
+      setDeletingTemplateId(null);
     }
+  }
+
+  function revealTemplateUploader() {
+    setTemplateError("");
+    setTemplateNotice("");
+    setShowTemplateUploader(true);
+    requestAnimationFrame(() => {
+      templateUploadRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      templateNameInputRef.current?.focus();
+    });
   }
 
   async function saveCampaign(mode: DeliveryMode) {
@@ -469,19 +516,49 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
                     disabled={templatesLoading || templates.length === 0}
                   >
                     {templatesLoading ? <option value="">Loading templates…</option> : templates.length === 0 ? <option value="">Upload your first template below</option> : templates.map((template) => (
-                      <option key={template.id} value={template.id}>{template.name}</option>
+                      <option key={template.id} value={template.id} disabled={template.archived}>{template.name}{template.archived ? " — Removed from library" : ""}</option>
                     ))}
                   </select>
-                  <button type="button" className="campaign-secondary-button" disabled={!activeTemplate || archivingTemplate} onClick={() => void archiveTemplate()}>{archivingTemplate ? "Archiving…" : "Archive"}</button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="campaign-secondary-button"
+                      onClick={revealTemplateUploader}
+                    >
+                      + Add template
+                    </button>
+                    <button
+                      type="button"
+                      className="campaign-secondary-button"
+                      disabled={!activeTemplate || Boolean(activeTemplate.archived)}
+                      onClick={() => activeTemplate && setTemplatePendingDelete(activeTemplate)}
+                    >
+                      {activeTemplate?.archived ? "Removed from library" : "Delete template"}
+                    </button>
+                  </div>
                 </div>
               </Field>
             ) : (
               <div className="campaign-field">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span>Email templates <b>*</b></span>
-                  <strong className="text-sm text-orange-300">
-                    {selectedTemplateIds.length} of 10 selected
-                  </strong>
+                  <div>
+                    <span>Email templates <b>*</b></span>
+                    <p className="mt-1 text-xs font-normal text-gray-400">
+                      {templates.length} saved {templates.length === 1 ? "template" : "templates"} · No app template-count limit
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <strong className="text-sm text-orange-300">
+                      {selectedTemplateIds.length} of {MAX_TEMPLATES_PER_BATCH} selected for this delivery batch
+                    </strong>
+                    <button
+                      type="button"
+                      className="campaign-secondary-button"
+                      onClick={revealTemplateUploader}
+                    >
+                      + Add template
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02]">
                   {templatesLoading ? (
@@ -491,51 +568,63 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
                   ) : templates.map((template) => {
                     const checked = selectedTemplateIds.includes(template.id);
                     return (
-                      <label key={template.id} className="flex cursor-pointer items-start gap-3 border-b border-white/10 p-4 last:border-b-0 hover:bg-white/[0.04]">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={!checked && selectedTemplateIds.length >= 10}
-                          onChange={(event) => toggleTemplate(template, event.target.checked)}
-                          className="mt-1 accent-orange-500"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <strong className="block text-sm text-white">{template.name}</strong>
-                          <small className="block truncate text-xs text-gray-400">{template.sourceFilename}</small>
-                        </span>
-                        {checked ? <span className="text-xs font-semibold text-orange-300">Included</span> : null}
-                      </label>
+                      <div key={template.id} className="flex flex-col gap-3 border-b border-white/10 p-4 last:border-b-0 hover:bg-white/[0.04] sm:flex-row sm:items-center">
+                        <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={!canSelectTemplate(selectedTemplateIds, template.id)}
+                            onChange={(event) => toggleTemplate(template, event.target.checked)}
+                            className="mt-1 accent-orange-500"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <strong className="block text-sm text-white">{template.name}</strong>
+                            <small className="block truncate text-xs text-gray-400">{template.sourceFilename}</small>
+                          </span>
+                          {checked ? <span className="text-xs font-semibold text-orange-300">Included</span> : null}
+                        </label>
+                        <div className="flex items-center gap-2 sm:shrink-0">
+                          <button
+                            type="button"
+                            aria-pressed={templateId === template.id}
+                            onClick={() => setTemplateId(template.id)}
+                            className="rounded-md border border-white/20 px-3 py-2 text-xs font-semibold text-gray-200 hover:border-orange-400/50 hover:text-orange-200"
+                          >
+                            {templateId === template.id ? "Previewing" : "Preview"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTemplatePendingDelete(template)}
+                            className="rounded-md px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
-                <small>Select one template for a normal campaign or several templates for one delivery batch.</small>
-                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <label className="campaign-field flex-1">
-                    <span>Template to preview</span>
-                    <select
-                      value={templateId}
-                      onChange={(event) => setTemplateId(event.target.value)}
-                      className="campaign-input"
-                      disabled={selectedTemplates.length === 0}
-                    >
-                      {selectedTemplates.length === 0 ? <option value="">Select a template</option> : selectedTemplates.map((template) => (
-                        <option key={template.id} value={template.id}>{template.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button type="button" className="campaign-secondary-button" disabled={!activeTemplate || archivingTemplate} onClick={() => void archiveTemplate()}>{archivingTemplate ? "Archiving…" : "Archive previewed template"}</button>
-                </div>
+                <small>Select one template for a normal campaign or up to {MAX_TEMPLATES_PER_BATCH} templates for one delivery batch. Saving templates and selecting templates are separate limits.</small>
               </div>
             )}
+            {templateNotice ? <p role="status" className="rounded-lg border border-emerald-400/25 bg-emerald-500/10 p-3 text-sm text-emerald-100">{templateNotice}</p> : null}
+            {templateError ? <p role="alert" className="rounded-lg border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-200">{templateError}</p> : null}
             {activeTemplate && <p className="text-sm text-gray-400">Uploaded from {activeTemplate.sourceFilename} · {activeTemplate.assetUrls.length} hosted image{activeTemplate.assetUrls.length === 1 ? "" : "s"}</p>}
+            {activeTemplate?.archived ? <p className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">This template was removed from the saved library. This campaign keeps its existing content, but the template cannot be selected for a new campaign.</p> : null}
             <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-4 text-sm text-orange-100">
               Recipient-name personalization is optional. Add <code>{"{{recipient_name}}"}</code> where the selected recipient&apos;s name should appear. If omitted, the template is sent unchanged. The fallback order is Full name, Company, then Email.
             </div>
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-              <h3 className="text-sm font-semibold text-white">Upload and save a new template</h3>
+            {showTemplateUploader ? <div ref={templateUploadRef} id="template-upload" className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Upload and save a new template</h3>
+                  <p className="mt-1 text-xs text-gray-400">Your library has no application-level template count limit.</p>
+                </div>
+                {templates.length > 0 ? <button type="button" onClick={() => setShowTemplateUploader(false)} className="rounded-md px-3 py-2 text-xs font-semibold text-gray-300 hover:bg-white/[0.06]">Close</button> : null}
+              </div>
               <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_1.25fr_auto] lg:items-end">
                 <Field label="Template name">
-                  <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} className="campaign-input" placeholder="e.g. E-Jeep Advertising" maxLength={120} />
+                  <input ref={templateNameInputRef} value={templateName} onChange={(event) => setTemplateName(event.target.value)} className="campaign-input" placeholder="e.g. E-Jeep Advertising" maxLength={120} />
                 </Field>
                 <Field label="HTML file" help=".html or .htm, maximum 5 MB">
                   <input key={templateFile?.name ?? "empty-template-file"} type="file" accept=".html,.htm,text/html" onChange={(event) => {
@@ -546,8 +635,8 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
                 </Field>
                 <button type="button" className="campaign-primary-button" disabled={uploadingTemplate} onClick={() => void uploadTemplate()}>{uploadingTemplate ? "Uploading…" : "Upload template"}</button>
               </div>
-              {templateError && <p role="alert" className="mt-3 text-sm text-red-300">{templateError}</p>}
-            </div>
+              <p className="mt-3 text-xs text-gray-500">HTML or HTM only, maximum 5 MB per file. A delivery batch can select up to {MAX_TEMPLATES_PER_BATCH} saved templates.</p>
+            </div> : null}
             {activeTemplate && activeTemplateHasPersonalization ? (
               <Field label="Preview greeting as" help="This changes only the preview. Brevo personalizes every recipient separately when sending.">
                 <select
@@ -649,6 +738,15 @@ export function CampaignForm({ campaignId }: { campaignId?: string }) {
         <span className="campaign-send-note">ⓘ This does not send the email.</span>
         <button type="submit" disabled={Boolean(savingMode) || slot.loading || (messageMode === "template" && selectedTemplateIds.length === 0) || (deliveryMode === "cron" && !slot.available && slot.campaign?.id !== campaignId)} className="campaign-primary-button">{savingMode === "cron" ? `Preparing ${selectedTemplateIds.length > 1 ? "batch" : "campaign"}…` : deliveryMode === "cron" ? "Prepare for cron" : "Save draft"}</button>
       </div>
+
+      {templatePendingDelete ? (
+        <TemplateDeleteDialog
+          templateName={templatePendingDelete.name}
+          deleting={deletingTemplateId === templatePendingDelete.id}
+          onCancel={closeTemplateDeleteDialog}
+          onConfirm={() => void deleteTemplate()}
+        />
+      ) : null}
     </form>
   );
 }
