@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getCampaignPrimaryAction,
   getCampaignDisplayStatus,
   getEligibleBatchCampaignIds,
   retainEligibleBatchSelection,
@@ -54,6 +55,39 @@ describe("campaign dashboard status", () => {
         archivedAt: "2026-11-19T08:00:00.000Z",
       })
     ).toBe("archived");
+  });
+
+  it("provides contextual full and compact campaign actions", () => {
+    expect(getCampaignPrimaryAction("draft-1", "draft")).toEqual({
+      href: "/dashboard/campaigns/draft-1/edit",
+      label: "Edit draft",
+    });
+    expect(
+      getCampaignPrimaryAction("waiting-1", "waiting", preparedMembership, {
+        compact: true,
+      }),
+    ).toEqual({
+      href: "/dashboard/campaign-batches/batch-1",
+      label: "Manage",
+    });
+    expect(getCampaignPrimaryAction("failed-1", "failed")).toMatchObject({
+      label: "Review issue",
+    });
+    expect(
+      getCampaignPrimaryAction("prepared-1", "prepared", preparedMembership, {
+        compact: true,
+      }),
+    ).toMatchObject({ label: "Continue" });
+    expect(
+      getCampaignPrimaryAction("sending-1", "sending", preparedMembership, {
+        compact: true,
+      }),
+    ).toMatchObject({ label: "View progress" });
+    expect(
+      getCampaignPrimaryAction("sent-1", "sent", undefined, {
+        compact: true,
+      }),
+    ).toMatchObject({ label: "View" });
   });
 });
 

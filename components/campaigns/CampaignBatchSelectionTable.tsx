@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { EditAndResendButton } from "@/components/campaigns/EditAndResendButton";
 import { CampaignArchiveButton } from "@/components/campaigns/CampaignArchiveButton";
 import {
+  getCampaignPrimaryAction,
   getEligibleBatchCampaignIds,
   getCampaignDisplayStatus,
   retainEligibleBatchSelection,
@@ -249,7 +250,7 @@ export function CampaignBatchSelectionTable({
                 },
                 membership,
               );
-              const primaryAction = getPrimaryAction(
+              const primaryAction = getCampaignPrimaryAction(
                 campaign.id,
                 displayStatus,
                 membership,
@@ -393,37 +394,6 @@ export function CampaignBatchSelectionTable({
       </div>
     </div>
   );
-}
-
-function getPrimaryAction(
-  campaignId: string,
-  status: CampaignDisplayStatus,
-  membership?: CampaignDeliveryMembership,
-) {
-  const campaignHref = `/dashboard/campaigns/${campaignId}`;
-  const batchHref = membership
-    ? `/dashboard/campaign-batches/${membership.batchId}`
-    : campaignHref;
-
-  if (status === "draft") {
-    return {
-      href: `/dashboard/campaigns/${campaignId}/edit`,
-      label: "Edit draft",
-    };
-  }
-  if (status === "prepared") {
-    return { href: batchHref, label: "Continue batch" };
-  }
-  if (status === "waiting") {
-    return { href: batchHref, label: "View waiting batch" };
-  }
-  if (status === "sending") {
-    return { href: batchHref, label: "View progress" };
-  }
-  if (status === "failed") {
-    return { href: campaignHref, label: "Review issue" };
-  }
-  return { href: campaignHref, label: "View campaign" };
 }
 
 function StatusBadge({ status }: { status: CampaignDisplayStatus }) {

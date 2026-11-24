@@ -3,14 +3,23 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  DashboardIcon,
+  type DashboardIconName,
+} from "@/components/dashboard/dashboard-icon";
 import { createClient } from "@/lib/supabase/client";
 
-const menuItems = [
-  { name: "Overview", href: "/dashboard", icon: "▦" },
-  { name: "Campaigns", href: "/dashboard/campaigns", icon: "✉" },
-  { name: "Contacts", href: "/dashboard/contacts", icon: "♙" },
-  { name: "Analytics", href: "/dashboard/analytics", icon: "▥" },
-  { name: "Settings", href: "/dashboard/settings", icon: "⚙" },
+const menuItems: Array<{
+  name: string;
+  href?: string;
+  icon: DashboardIconName;
+  comingSoon?: boolean;
+}> = [
+  { name: "Overview", href: "/dashboard", icon: "grid" },
+  { name: "Campaigns", href: "/dashboard/campaigns", icon: "campaign" },
+  { name: "Contacts", href: "/dashboard/contacts", icon: "contacts" },
+  { name: "Analytics", icon: "bar-chart", comingSoon: true },
+  { name: "Settings", icon: "settings", comingSoon: true },
 ];
 
 type Props = {
@@ -21,9 +30,9 @@ type Props = {
 };
 
 export default function DashboardSidebar({ user }: Props) {
-const pathname = usePathname();
-const searchParams = useSearchParams();
-const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
   const initials =
     user.name
@@ -59,23 +68,39 @@ const router = useRouter();
 
       <nav className="dashboard-nav">
         {menuItems.map((item) => {
-const active =
-  item.href === "/dashboard"
-    ? pathname === "/dashboard" && searchParams.get("view") !== "contacts"
-    : item.href === "/dashboard/contacts"
-      ? pathname.startsWith(item.href) ||
-        (pathname === "/dashboard" &&
-          searchParams.get("view") === "contacts")
-      : pathname.startsWith(item.href);
+          if (!item.href || item.comingSoon) {
+            return (
+              <span
+                key={item.name}
+                className="nav-item nav-disabled"
+                aria-disabled="true"
+              >
+                <DashboardIcon name={item.icon} className="nav-icon" />
+                <span>{item.name}</span>
+                <span className="nav-coming-soon">Coming soon</span>
+              </span>
+            );
+          }
+
+          const active =
+            item.href === "/dashboard"
+              ? pathname === "/dashboard" &&
+                searchParams.get("view") !== "contacts"
+              : item.href === "/dashboard/contacts"
+                ? pathname.startsWith(item.href) ||
+                  (pathname === "/dashboard" &&
+                    searchParams.get("view") === "contacts")
+                : pathname.startsWith(item.href);
 
           return (
             <Link
               key={item.name}
               href={item.href}
               className={`nav-item ${active ? "nav-active" : ""}`}
+              aria-current={active ? "page" : undefined}
             >
-              <span className="nav-icon">{item.icon}</span>
-              {item.name}
+              <DashboardIcon name={item.icon} className="nav-icon" />
+              <span>{item.name}</span>
             </Link>
           );
         })}
@@ -103,7 +128,7 @@ const active =
             title="Log out"
             aria-label="Log out"
           >
-            ↪
+            <DashboardIcon name="arrow-right" width={17} height={17} />
           </button>
         </div>
       </div>
