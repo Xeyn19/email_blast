@@ -692,6 +692,7 @@ export default function DashboardClient({
 
             {/* CSV Upload */}
             <section
+              id="import-contacts"
               className="campaign-section"
               style={{ marginBottom: "24px" }}
             >

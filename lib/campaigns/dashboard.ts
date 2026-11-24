@@ -14,6 +14,50 @@ export type CampaignDeliveryMembership = {
   preparationStatus: string;
 };
 
+export function getCampaignPrimaryAction(
+  campaignId: string,
+  status: CampaignDisplayStatus,
+  membership?: CampaignDeliveryMembership,
+  options: { compact?: boolean } = {},
+) {
+  const campaignHref = `/dashboard/campaigns/${campaignId}`;
+  const batchHref = membership
+    ? `/dashboard/campaign-batches/${membership.batchId}`
+    : campaignHref;
+
+  if (status === "draft") {
+    return {
+      href: `${campaignHref}/edit`,
+      label: options.compact ? "Edit" : "Edit draft",
+    };
+  }
+  if (status === "prepared") {
+    return {
+      href: batchHref,
+      label: options.compact ? "Continue" : "Continue batch",
+    };
+  }
+  if (status === "waiting") {
+    return {
+      href: batchHref,
+      label: options.compact ? "Manage" : "View waiting batch",
+    };
+  }
+  if (status === "sending") {
+    return { href: batchHref, label: "View progress" };
+  }
+  if (status === "failed") {
+    return {
+      href: campaignHref,
+      label: options.compact ? "Review" : "Review issue",
+    };
+  }
+  return {
+    href: campaignHref,
+    label: options.compact ? "View" : "View campaign",
+  };
+}
+
 export function getEligibleBatchCampaignIds(
   campaigns: Array<{
     id: string;
